@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 
-import {GIO, GLIB, calls, clipMethods, ext, prefs, SptInstance} from './_harness.mjs';
+import {GIO, GLIB, calls, clipMethods, ext, prefs, SptInstance, setLsFs} from './_harness.mjs';
 
 let passed = 0;
 const fails = [];
@@ -411,6 +411,103 @@ check('suggest: fires request for plain text', () => {
     calls.soupReq = 0;
     inst._webSuggest('hello world');
     assert.strictEqual(calls.soupReq, 1);
+});
+
+/* ============ `ls <folder>` ============ */
+check('ls: lists folder contents, folders first, activates item', () => {
+    const fs = new Map([
+        ['/home/test', [
+            {name: 'notes.txt', isDir: false}, {name: 'docs', isDir: true},
+        ]],
+        ['/home/test/docs', [
+            {name: 'a.txt', isDir: false}, {name: 'sub', isDir: true},
+        ]],
+        ['/home/test/docs/sub', []],
+    ]);
+    setLsFs(fs);
+    try {
+        const inst = SptInstance({get_strv: () => []});
+        inst.close = () => { calls.lsClosed = true; };
+        const rows = inst._lsRows('docs');
+        assert.strictEqual(rows.length, 2);
+        assert.strictEqual(rows[0].label, 'sub');
+        assert.strictEqual(rows[0].icon, 'folder');
+        assert.strictEqual(rows[1].label, 'a.txt');
+        assert.strictEqual(rows[1].group, 'ls');
+        calls.uris = [];
+        rows[1].activate.call(inst);
+        assert.ok(calls.uris.includes('file:///home/test/docs/a.txt'), 'opens item');
+        assert.ok(calls.lsClosed, 'closes search');
+        assert.strictEqual(inst._lsRows('docs/sub').length, 1);
+        assert.ok(inst._lsRows('docs/sub')[0].label === 'Empty folder');
+    } finally {
+        setLsFs(null);
+    }
+});
+check('ls: folder resolution — home, direct, case-insensitive, absolute, missing', () => {
+    const fs = new Map([
+        ['/home/test', [
+            {name: 'DOWNLOADS', isDir: true}, {name: 'pics', isDir: true},
+        ]],
+        ['/home/test/DOWNLOADS', [{name: 'x.zip', isDir: false}]],
+        ['/home/test/pics', [{name: 'wall.jpg', isDir: false}]],
+        ['/etc/conf', [{name: 'a.conf', isDir: false}]],
+    ]);
+    setLsFs(fs);
+    try {
+        const inst = SptInstance({get_strv: () => []});
+        assert.strictEqual(inst._findFolder('home'), '/home/test');
+        assert.strictEqual(inst._findFolder('DOWNLOADS'), '/home/test/DOWNLOADS');
+        assert.strictEqual(inst._findFolder('downloads'), '/home/test/DOWNLOADS');
+        assert.strictEqual(inst._findFolder('/etc/conf'), '/etc/conf');
+        assert.strictEqual(inst._findFolder('nonexistent'), null);
+    } finally {
+        setLsFs(null);
+    }
+});
+check('ls: bounded recursive search finds nested folder', () => {
+    const fs = new Map([
+        ['/home/test', [{name: 'work', isDir: true}]],
+        ['/home/test/work', [{name: 'src', isDir: true}, {name: 'x.log', isDir: false}]],
+        ['/home/test/work/src', [{name: 'node_modules', isDir: true}]],
+    ]);
+    setLsFs(fs);
+    try {
+        const inst = SptInstance({get_strv: () => []});
+        assert.strictEqual(inst._findFolder('src'), '/home/test/work/src');
+        assert.strictEqual(inst._findFolder('x.log'), null);
+    } finally {
+        setLsFs(null);
+    }
+});
+check('ls: missing folder and empty query give hint rows', () => {
+    const inst = SptInstance({get_strv: () => []});
+    setLsFs(null);
+    const miss = inst._lsRows('nope');
+    assert.ok(miss[0].label.startsWith('No folder'));
+    const hint = inst._lsRows('');
+    assert.ok(hint[0].label.includes('List a folder'));
+    assert.ok(hint[0].sublabel.includes('ls home'));
+});
+check('ls: entry italic styling applies only to the "ls" prefix', () => {
+    const inst = SptInstance({get_strv: () => []});
+    inst._hotWordColor = null;
+    inst._markupLock = false;
+    let attrs = null;
+    inst._entry = {
+        text: 'ls home',
+        get_theme_node: () => null,
+        clutter_text: {set_attributes: a => { attrs = a; }},
+    };
+    inst._hotWordMarkup = false;
+    inst._applyHotWordStyle();
+    assert.notStrictEqual(inst._hotWordMarkup, false);
+    assert.strictEqual(inst._hotWordMarkup, 'ls');
+    assert.notStrictEqual(attrs, null);
+    inst._entry.text = 'fire';
+    inst._hotWordMarkup = 'ls';
+    inst._applyHotWordStyle();
+    assert.strictEqual(inst._hotWordMarkup, false);
 });
 
 /* ============ report ============ */

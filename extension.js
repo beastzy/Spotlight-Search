@@ -1628,11 +1628,52 @@ export default class SpotlightSearchExtension extends Extension {
         return this._hotWords().find(h => h.token === ql) || null;
     }
 
-    /* Italicize the entry when the whole typed text matches a HotWord. The
-       match only triggers when text == the HotWord token, so italicizing the
-       whole entry is visually identical to italicizing just the word. St's
+    /* Italicize the entry when it is a HotWord or an `ls <folder>` command.
+       HotWords match only when text == the token, so the whole entry gets
+       italicized; an `ls` prefix gets only the "ls" word italicized. St's
        theme pushes the entry color via Pango attributes, so any replacement
        list must carry the theme color too — otherwise the text turns black. */
+    _applyHotWordStyle() {
+        if (this._markupLock)
+            return;
+        if (!this._entry || !this._entry.clutter_text)
+            return;
+        const text = this._entry.text;
+        const hot = this._matchHotWord(text);
+        const lsM = /^( *)(ls)([ \t]|$)/i.exec(text);
+        let mode = null;
+        let start = 0;
+        let end = -1;
+        if (hot) {
+            mode = 'hot';
+        } else if (lsM) {
+            mode = 'ls';
+            start = lsM[1].length;
+            end = start + 2;
+        }
+        try {
+            if (mode && this._hotWordMarkup !== mode) {
+                const c = this._themeEntryColor();
+                const attrs = new Pango.AttrList();
+                attrs.insert(Pango.attr_style_new(Pango.Style.ITALIC, start, end));
+                if (c) {
+                    attrs.insert(Pango.attr_foreground_new(
+                        c.red * 257, c.green * 257, c.blue * 257));
+                }
+                this._entry.clutter_text.set_attributes(attrs);
+                this._hotWordMarkup = mode;
+                spotLog(`hotword: ${mode === 'hot' ? 'brand' : 'ls'}-italic «${text}»`);
+            } else if (!mode && this._hotWordMarkup) {
+                this._entry.clutter_text.set_attributes(this._colorList());
+                this._hotWordMarkup = false;
+            }
+        } catch (e) {
+            spotLog(`hotword style: ERROR ${e}`);
+            this._entry.clutter_text.set_attributes(this._colorList());
+            this._hotWordMarkup = false;
+        }
+    }
+
     _themeEntryColor() {
         try {
             const node = this._entry.get_theme_node();
@@ -1655,36 +1696,6 @@ export default class SpotlightSearchExtension extends Extension {
         attrs.insert(Pango.attr_foreground_new(
             c.red * 257, c.green * 257, c.blue * 257));
         return attrs;
-    }
-
-    _applyHotWordStyle() {
-        if (this._markupLock)
-            return;
-        if (!this._entry || !this._entry.clutter_text)
-            return;
-        const text = this._entry.text;
-        const hot = this._matchHotWord(text);
-        try {
-            if (hot && this._hotWordMarkup !== true) {
-                const c = this._themeEntryColor();
-                const attrs = new Pango.AttrList();
-                attrs.insert(Pango.attr_style_new(Pango.Style.ITALIC, 0, -1));
-                if (c) {
-                    attrs.insert(Pango.attr_foreground_new(
-                        c.red * 257, c.green * 257, c.blue * 257));
-                }
-                this._entry.clutter_text.set_attributes(attrs);
-                this._hotWordMarkup = true;
-                spotLog(`hotword: brand «${text}» (italic)`);
-            } else if (!hot && this._hotWordMarkup) {
-                this._entry.clutter_text.set_attributes(this._colorList());
-                this._hotWordMarkup = false;
-            }
-        } catch (e) {
-            spotLog(`hotword style: ERROR ${e}`);
-            this._entry.clutter_text.set_attributes(this._colorList());
-            this._hotWordMarkup = false;
-        }
     }
 
     _hotWordRow(hw) {
@@ -2279,6 +2290,152 @@ export default class SpotlightSearchExtension extends Extension {
         }
     }
 
+    /* ----- `ls <folder>` --------------------------------------------------- */
+
+    /* Build result rows for an `ls` command: resolve the folder by name,
+       then list every item inside it (folders first, then files). */
+    _lsRows(spec) {
+        const rows = [];
+        const s = String(spec || '').trim();
+        if (!s) {
+            rows.push({
+                rank: 0,
+                group: 'ls',
+                label: 'List a folder’s contents',
+                sublabel: 'Type a folder name after ls, e.g. “ls home” or “ls Documents”',
+                icon: 'folder-open-symbolic',
+            });
+            return rows;
+        }
+        const dirPath = this._findFolder(s);
+        if (!dirPath) {
+            rows.push({
+                rank: 0,
+                group: 'ls',
+                label: `No folder “${s}” found`,
+                sublabel: 'Looked in your home directory and its subfolders',
+                icon: 'edit-find-symbolic',
+            });
+            return rows;
+        }
+        const items = this._lsEntries(dirPath);
+        for (let i = 0; i < items.length; i++) {
+            const it = items[i];
+            rows.push({
+                rank: i,
+                group: 'ls',
+                label: it.name,
+                sublabel: it.isDir
+                    ? `Folder · ${dirPath}/${it.name}`
+                    : `File · ${dirPath}/${it.name}`,
+                icon: it.isDir ? 'folder' : fileIconName(it.path),
+                activate: () => {
+                    openUri(it.uri);
+                    this.close();
+                },
+            });
+        }
+        if (items.length === 0) {
+            rows.push({
+                rank: 0,
+                group: 'ls',
+                label: 'Empty folder',
+                sublabel: dirPath,
+                icon: 'folder-open-symbolic',
+            });
+        }
+        return rows;
+    }
+
+    /* Resolve a folder name to a real path: home shorthand, absolute paths,
+       a direct child of $HOME (case-insensitive), then a bounded scan of
+       subfolders. */
+    _findFolder(spec) {
+        const home = GLib.get_home_dir();
+        const q = String(spec || '').trim();
+        if (!q)
+            return null;
+        if (q.toLowerCase() === 'home')
+            return home;
+        const expanded = q.startsWith('~/') ? home + q.slice(1) : q;
+        const isDir = path => {
+            try {
+                return GLib.file_test(path, GLib.G_FILE_TEST_IS_DIR);
+            } catch (e) {
+                return false;
+            }
+        };
+        if (expanded.startsWith('/') && isDir(expanded))
+            return expanded;
+        const direct = `${home}/${q}`;
+        if (isDir(direct))
+            return direct;
+        for (const c of this._lsEntries(home)) {
+            if (c.isDir && c.name.toLowerCase() === q.toLowerCase())
+                return c.path;
+        }
+        return this._searchDirName(q, home, 3, 2000);
+    }
+
+    /* Enumerate a directory, skipping hidden entries, folders first. */
+    _lsEntries(path) {
+        const out = [];
+        try {
+            const it = Gio.File.new_for_path(path)
+                .enumerate_children('standard::type,standard::name',
+                    Gio.FileQueryInfoFlags.NONE, null);
+            let info;
+            while ((info = it.next_file(null))) {
+                try {
+                    const name = info.get_name();
+                    if (!name || name.startsWith('.'))
+                        continue;
+                    const item = Gio.File.new_for_path(`${path}/${name}`);
+                    out.push({
+                        name,
+                        isDir: info.get_file_type() === Gio.FileType.DIRECTORY,
+                        path: item.get_path(),
+                        uri: item.get_uri(),
+                    });
+                } catch (e) {
+                    /* skip unreadable entry */
+                }
+            }
+            it.close(null);
+        } catch (e) {
+            spotLog(`ls: enumerate ${path} ERROR ${e}`);
+        }
+        out.sort((a, b) => (Number(b.isDir) - Number(a.isDir)) ||
+            a.name.localeCompare(b.name));
+        return out;
+    }
+
+    /* Bounded recursive scan for a directory whose name matches (depth+node
+       budget) so `ls <folder>` stays instant on big trees. */
+    _searchDirName(q, dirPath, depth, budget) {
+        const entries = this._lsEntries(dirPath);
+        for (const c of entries) {
+            budget--;
+            if (budget <= 0)
+                return null;
+            if (c.isDir && c.name.toLowerCase() === q.toLowerCase())
+                return c.path;
+        }
+        if (depth <= 0)
+            return null;
+        for (const c of entries) {
+            budget--;
+            if (budget <= 0)
+                return null;
+            if (!c.isDir)
+                continue;
+            const hit = this._searchDirName(q, c.path, depth - 1, budget);
+            if (hit)
+                return hit;
+        }
+        return null;
+    }
+
     _installedApps() {
         const now = Date.now();
         /* Apps change rarely (installs/removals), and re-enumerating every
@@ -2345,6 +2502,14 @@ export default class SpotlightSearchExtension extends Extension {
                     this.close();
                 },
             }], q);
+            return;
+        }
+
+        /* `ls <folder>`: list a folder's contents in place of search results
+           and web suggestions. */
+        const lsSpec = text.match(/^ls(?:[ \t]+(.+))?$/i);
+        if (lsSpec) {
+            this._render(this._lsRows(lsSpec[1]), q);
             return;
         }
 
@@ -2656,7 +2821,7 @@ export default class SpotlightSearchExtension extends Extension {
                the widest slice, like macOS Spotlight's file-type results. */
             const extQuery = q.length >= 2 && q.startsWith('.');
             const quota = {
-                calc: 1, web: 1, app: 4, action: 2,
+                calc: 1, web: 1, app: 4, action: 2, ls: 24,
                 file: extQuery ? 9 : 8, other: 3,
             };
             const first = extQuery ? ['file', 'app', 'action', 'web', 'calc', 'other']

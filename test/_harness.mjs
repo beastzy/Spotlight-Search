@@ -27,12 +27,8 @@ const GIO = {
         system: {call_sync: () => ({})},
     },
     Cancellable: class {cancel() {}},
-    File: {
-        new_for_path: (p) => ({
-            replace_contents: () => [true, null],
-            delete: () => true,
-        }),
-    },
+    FileType: {REGULAR: 1, DIRECTORY: 2, SYMBOLIC_LINK: 3},
+    FileQueryInfoFlags: {NONE: 0},
     DBusProxyFlags: {NONE: 0},
     DBusProxy: {
         new_sync: () => ({
@@ -42,6 +38,48 @@ const GIO = {
         }),
     },
 };
+
+/* Virtual filesystem used by the `ls` tests. map: path -> [{name, isDir}].
+   new_for_path consults it live, and setLsFs also overrides GLib.file_test
+   so directories resolve against the map keys. */
+let lsFs = null;
+const emptyEnumerator = () => ({next_file: () => null, close: () => {}});
+GIO.File = {
+    new_for_path: (p) => {
+        const list = lsFs ? (lsFs.get(p) ?? null) : null;
+        const enumerator = list
+            ? () => {
+                let i = 0;
+                return {
+                    next_file: () => {
+                        if (i >= list.length)
+                            return null;
+                        const e = list[i++];
+                        return {
+                            get_name: () => e.name,
+                            get_file_type: () => e.isDir
+                                ? GIO.FileType.DIRECTORY
+                                : GIO.FileType.REGULAR,
+                        };
+                    },
+                    close: () => {},
+                };
+            }
+            : emptyEnumerator;
+        return {
+            replace_contents: () => [true, null],
+            delete: () => true,
+            get_path: () => p,
+            get_uri: () => 'file://' + p,
+            enumerate_children: () => enumerator(),
+        };
+    },
+};
+const lsFileTest = (p) => Boolean(lsFs && lsFs.has(p));
+function setLsFs(map) {
+    lsFs = map || null;
+    GLIB.file_test = lsFs ? lsFileTest : () => false;
+}
 
 const GLIB = {
     get_home_dir: () => '/home/test',
@@ -62,6 +100,7 @@ const GLIB = {
     remove: () => true,
     find_program_in_path: () => null,
     G_FILE_TEST_EXISTS: 0,
+    G_FILE_TEST_IS_DIR: 4,
 };
 
 const GDK_KEY = (v, name) => ({[`KEY_${name}`]: v, [`KEY_${name}_KEYVAL`]: v});
@@ -206,4 +245,4 @@ function SptInstance(settings) {
     return inst;
 }
 
-export {GIO, GLIB, GTK, GDK, calls, clipMethods, ext, prefs, loadModule, SptInstance};
+export {GIO, GLIB, GTK, GDK, calls, clipMethods, ext, prefs, loadModule, SptInstance, setLsFs};

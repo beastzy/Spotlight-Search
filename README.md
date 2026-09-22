@@ -14,6 +14,7 @@ Press **Super+Space** and an overlay slides in above your top bar, where you can
 
 - **Apps** — instant, usage-ranked application search with icons and descriptions.
 - **Files** — live search of your home folder and common subfolders (`Desktop`, `Documents`, `Downloads`, `Pictures`, …). Hidden/cache directories (`node_modules`, `.cache`, …) are skipped, and the walk is bounded so it stays fast.
+- **Folder browser** — type `ls <folder>` (e.g. `ls home`, `ls Documents`) and every file and subfolder inside is listed right in the launcher for instant opening. The `ls` is italicized as you type.
 - **Calculator** — type `12*8+3`, `sqrt(144)`, `2^10`, `sin(pi/2)`, `5!`, `√9`… and the result is shown; press **Enter** to copy it.
 - **Unit conversion** — `10 km to miles`, `3 cups to ml`, `100 f to c`, `60 mph to km/h` are converted instantly (Enter copies).
 - **Hotwords** — type your own magic words (`youtube`, `todo`, …) to run command-line/URL/system actions.
