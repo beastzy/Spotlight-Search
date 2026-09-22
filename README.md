@@ -1,6 +1,14 @@
-# Spotlight Search — a GNOME Shell extension
+# Spotlight Search
 
-A macOS Spotlight-style quick launcher for GNOME Shell (45+). Press **Super+Space** and an overlay slides in above your top bar, where you can search as you type.
+A macOS Spotlight-style quick launcher for **GNOME Shell**.
+
+Press **Super+Space** and an overlay slides in above your top bar, where you can search apps, files, do math, convert units, fire off system actions, and dig through your clipboard history — as you type.
+
+<p align="center">
+  <img src="https://img.shields.io/badge/GNOME_Shell-45%E2%80%9350-4cbf20" alt="GNOME Shell 45–50">
+  <img src="https://img.shields.io/badge/version-1.0-blue" alt="version 1.0">
+  <img src="https://img.shields.io/badge/license-GPL--3.0-green" alt="GPL-3.0">
+</p>
 
 ## Features
 
@@ -28,43 +36,84 @@ A macOS Spotlight-style quick launcher for GNOME Shell (45+). Press **Super+Spac
 | `Enter` | Open selected |
 | `Esc` / click outside | Close |
 
+## Requirements
+
+- **GNOME Shell 45 – 50** (Wayland or X11)
+- An up-to-date GNOME desktop session
+
 ## Install
 
+### 1. From a GitHub release (easiest)
+
+1. Download the latest `spotlight-search@umar.local.zip` from the [Releases](https://github.com/beastzy/Spotlight-Search/releases) page.
+2. Extract and it place it where GNOME Shell loads extensions from:
+
+   ```bash
+   mkdir -p ~/.local/share/gnome-shell/extensions
+   cd ~/.local/share/gnome-shell/extensions
+   unzip ~/Downloads/spotlight-search@umar.local.zip
+   glib-compile-schemas spotlight-search@umar.local/schemas
+   ```
+
+3. Log out and back in (or press **Alt+F2**, type `r` and Enter on X11), then enable it:
+
+   ```bash
+   gnome-extensions enable spotlight-search@umar.local
+   ```
+
+### 2. From source
+
 ```bash
-cd spotlight-search
+git clone https://github.com/beastzy/Spotlight-Search.git
+cd Spotlight-Search
 chmod +x install.sh
 ./install.sh
 ```
 
-On **Wayland**, or if the extension does not appear immediately, log out and back in, then enable it with `gnome-extensions enable spotlight-search@umar.local` (or the Extensions app).
+The `install.sh` script copies the extension to `~/.local/share/gnome-shell/extensions` and compiles the schema, then you enable it as above.
 
-You can tweak the shortcut and panel width via `dconf` (see profile > settings):
+> **Wayland** always needs a log-out/log-in (or restart) before a new extension shows up.
+
+## Customization
+
+You can tweak the shortcut, panel width, search depth and more via dconf:
 
 ```
 dconf write /org/gnome/shell/extensions/spotlight-search/toggle-shortcut "['<Super>space']"
 dconf write /org/gnome/shell/extensions/spotlight-search/panel-width 640
+dconf write /org/gnome/shell/extensions/spotlight-search/search-files true
+```
+
+Or browse the full list of keys programmatically:
+
+```
+gsettings list-recursively org.gnome.shell.extensions.spotlight-search
 ```
 
 ## Layout
 
 ```
-spotlight-search/
+Spotlight-Search/
 ├── extension.js      # all logic + UI
+├── prefs.js          # settings UI
 ├── metadata.json     # extension metadata (uuid, shell versions)
 ├── schemas/          # GSettings schema
 │   └── …spotlight-search.gschema.xml
+├── test/             # logic test suite (run with `node test/run-tests.mjs`)
 └── install.sh        # installs to ~/.local/share/gnome-shell/extensions
 ```
 
 ## Troubleshooting
 
-- **`Failed to load extension`** — check the version you are on: the extension targets `shell-version` 45–49. If yours differs, edit `metadata.json`.
-- **Super+Space does nothing** — confirm the extension is enabled and the schema compiled (`glib-compile-schemas ~/.local/share/gnome-shell/extensions/spotlight-search@umar.local/schemas`), then re-login.
-- **Runs slow** — lower `search-depth` or disable file search via the `search-files` dconf key.
-- **Logs / errors** — inspect with `journalctl -f -o cat /usr/bin/gnome-shell`, or from a TTY run `GNOME_SHELL_JS_DEBUG=1`.
+- **`Failed to load extension`** — make sure your shell version is in the `shell-version` list of `metadata.json`; if not, add it and re-login.
+- **Super+Space does nothing** — confirm the extension is enabled and the schema is compiled (`glib-compile-schemas ~/.local/share/gnome-shell/extensions/spotlight-search@umar.local/schemas`), then re-login.
+- **Runs slow** — lower `search-depth` or disable file search with the `search-files` dconf key.
+- **Logs / errors** — inspect with `journalctl -f -o cat /usr/bin/gnome-shell`.
 
-## Notes
+## Privacy
 
-Written to target GNOME 45+ (ES-module extensions). It builds on stable Shell APIs (`Shell.AppSystem`, `Main.pushModal`, `Main.wm.addKeybinding`) and should keep working into GNOME 46–49. Contributions welcome.
+Captured clipboard text is kept only in memory for the session; captured clipboard images are written to `~/.cache/spotlight-clip-*.png` (deleted on `clip clear` or when they age out) so they can be re-copied. Re-copying an image uses the same `St.Clipboard.set_content` call GNOME Shell's screenshot UI itself uses; if that is ever unavailable it falls back to an external clipboard tool (`wl-copy`/`xclip`) when installed, and finally to copying the file path. Nothing is sent anywhere — the only network requests are the Google-suggestion lookups for plain queries, which you can disable in settings.
 
-**Privacy:** captured clipboard text is kept only in memory for the session; captured clipboard images are written to `~/.cache/spotlight-clip-*.png` (deleted on `clip clear` or when they age out) so they can be re-copied. Re-copying an image uses the same `St.Clipboard.set_content` call GNOME Shell's screenshot UI itself uses; if that is ever unavailable it falls back to an external clipboard tool (`wl-copy`/`xclip`) when installed, and finally to copying the file path. Nothing is sent anywhere — the only network requests are the Google-suggestion lookups for plain queries, which you can disable in settings.
+## License
+
+GPL-3.0. Contributions welcome — see the issue tracker on this repository.
