@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.spotlight-search"
+          path="/org/gnome/shell/extensions/spotlight-search/">
+
+    <key name="toggle-shortcut" type="as">
+      <default>['&lt;Super&gt;space']</default>
+      <summary>Shortcut to toggle Spotlight Search</summary>
+      <description>Keybinding that opens and closes the Spotlight overlay.</description>
+    </key>
+
+    <key name="web-prefixes" type="as">
+      <default>[ '-g|Google|https://www.google.com/search?q=', '-yt|YouTube|https://www.youtube.com/results?search_query=' ]</default>
+      <summary>Custom web search prefixes</summary>
+      <description>Entries in the form "token|Label|url prefix". Typing "token query" in the search box opens the URL prefix plus the query in your default browser. For example, the default "-g|Google|https://www.google.com/search?q=" makes "-G potatoes" search Google for potatoes.</description>
+    </key>
+
+    <key name="hotwords" type="as">
+      <default>[ 'youtube|url|https://www.youtube.com' ]</default>
+      <summary>Custom HotWord actions</summary>
+      <description>Entries in the form "word|type|target". Type is one of url (open a webpage in the default browser), command (run a shell command) or system (lock, logout, suspend, restart, poweroff). When the word is typed in the search box it is highlighted and bolded, and pressing Enter runs its action. For example, the default "youtube|url|https://www.youtube.com" opens YouTube when you type "youtube" and press Enter.</description>
+    </key>
+
+    <key name="panel-width" type="i">
+      <default>640</default>
+      <summary>Panel width in pixels</summary>
+      <description>Width of the Spotlight search panel. Must be greater than 0.</description>
+    </key>
+
+    <key name="panel-font-size" type="i">
+      <default>24</default>
+      <summary>Search entry font size</summary>
+      <description>Font size in pixels of the Spotlight search text entry.</description>
+    </key>
+
+    <key name="panel-radius" type="i">
+      <default>18</default>
+      <summary>Panel corner radius</summary>
+      <description>Corner radius of the Spotlight search panel in pixels.</description>
+    </key>
+
+    <key name="panel-opacity" type="d">
+      <default>0.97</default>
+      <summary>Panel background opacity</summary>
+      <description>Background opacity of the Spotlight search panel (0.0 fully transparent to 1.0 fully opaque).</description>
+    </key>
+
+    <key name="panel-y-offset" type="d">
+      <default>18.0</default>
+      <summary>Panel vertical position</summary>
+      <description>Position of the panel from the top of the screen, as a percentage of the monitor height.</description>
+    </key>
+
+    <key name="theme" type="s">
+      <default>'default'</default>
+      <summary>Panel color theme</summary>
+      <description>Color theme of the search panel: default, light, midnight, ocean, glass or blur.</description>
+    </key>
+
+    <key name="enable-glow" type="b">
+      <default>true</default>
+      <summary>Glow around the search panel</summary>
+      <description>Adds a soft colored halo around the search panel, like macOS Spotlight.</description>
+    </key>
+
+    <key name="max-results" type="i">
+      <default>10</default>
+      <summary>Maximum visible results</summary>
+      <description>Maximum number of search results shown at once.</description>
+    </key>
+
+    <key name="search-files" type="b">
+      <default>true</default>
+      <summary>Search files</summary>
+      <description>Whether the Spotlight overlay searches your home directory, media mounts and removable drives for matching files.</description>
+    </key>
+
+    <key name="search-depth" type="i">
+      <default>20</default>
+      <summary>File search depth</summary>
+      <description>How many directory levels to descend when searching files. Set to -1 for no limit.</description>
+    </key>
+    <key name="max-entries" type="i">
+      <default>80000</default>
+      <summary>Max entries scanned per search</summary>
+      <description>Hard cap on how many files/directories each file search scans (Everything-style sweeps are bounded to stay responsive).</description>
+    </key>
+    <key name="max-matches" type="i">
+      <default>60</default>
+      <summary>Maximum file results</summary>
+      <description>Maximum number of file results returned per search.</description>
+    </key>
+
+    <key name="web-suggestions" type="b">
+      <default>true</default>
+      <summary>Show web search suggestions</summary>
+      <description>While you type, show up to three live web search suggestions below the other results. Pressing Enter on one opens it in your default browser. Requires network access.</description>
+    </key>
+
+    <key name="clipboard-history" type="b">
+      <default>true</default>
+      <summary>Keep a clipboard history</summary>
+      <description>Watch the system clipboard and remember recently copied text. Typing "clip" and a search term shows matching entries that you can copy again with Enter. Copied text is only stored locally.</description>
+    </key>
+
+    <key name="clipboard-history-size" type="i">
+      <default>20</default>
+      <summary>Clipboard history size</summary>
+      <description>Maximum number of recent clipboard entries to remember. Must be greater than 0.</description>
+    </key>
+  </schema>
+</schemalist>

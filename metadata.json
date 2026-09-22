@@ -1,0 +1,10 @@
+{
+  "uuid": "spotlight-search@umar.local",
+  "name": "Spotlight Search",
+  "description": "macOS-style Spotlight quick launcher: instant search for apps, files, calculator with unit conversion, hotwords, timers, emoji, web suggestions and system actions. Copy-and-paste and the clipboard history use the system clipboard.",
+  "version-name": "1.0",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "url": "https://github.com/umar/spotlight-search",
+  "settings-schema": "org.gnome.shell.extensions.spotlight-search",
+  "gettext-domain": "spotlight-search"
+}
