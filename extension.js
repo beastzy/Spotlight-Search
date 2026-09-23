@@ -1213,6 +1213,14 @@ this._ghost = null;
         this._gridCells = [];
         this._gridActive = false;
         this._gridSel = 0;
+        /* True once the user explicitly picks a grid cell with the
+           keyboard (arrows/Home/End). Hover and the initial highlight
+           don't count: Enter with no explicit pick opens the listed
+           folder itself instead of the first item. */
+        this._gridTouched = false;
+        /* Last seen pointer position: a grid cell appearing under a
+           stationary cursor must not count as hover. */
+        this._lastPointer = null;
         this._ghost = null;
         this._lsUser = null;
         this._refineId = 0;
@@ -1649,6 +1657,18 @@ this._ghost = null;
             }
         }
 
+        /* `ls` on a real but empty folder: Enter opens the folder
+           itself — there is nothing else to open. */
+        if (this._lsNav === 'grid' && this._gridData && this._gridData.found &&
+            this._gridData.dirPath &&
+            (!this._gridData.items || this._gridData.items.length === 0) &&
+            (symbol === Clutter.KEY_Return ||
+                symbol === Clutter.KEY_KP_Enter ||
+                symbol === Clutter.KEY_ISO_Enter)) {
+            if (this._openLsFolder())
+                return Clutter.EVENT_STOP;
+        }
+
         /* `ls` grid navigation. */
         if (this._gridActive && this._gridData &&
             this._gridData.items.length > 0) {
@@ -1657,12 +1677,39 @@ this._ghost = null;
             if (symbol === Clutter.KEY_Return ||
                 symbol === Clutter.KEY_KP_Enter ||
                 symbol === Clutter.KEY_ISO_Enter) {
+                /* No explicit pick yet: Enter opens the listed folder
+                   itself in the file manager instead of the first item.
+                   Arrows/Home/End (or a click) mean a real choice. */
+                if (!this._gridTouched && this._openLsFolder())
+                    return Clutter.EVENT_STOP;
                 this._gridActivate(this._gridSel);
                 return Clutter.EVENT_STOP;
             }
             let moved = false;
             let sel = this._gridSel;
-            if (symbol === Clutter.KEY_Right) {
+            /* Navigation keys only here — ordinary typing must fall
+               through to the search bar. (An earlier version reacted
+               to ANY key while nothing was highlighted and ate the
+               character to light up item 0.) */
+            const isGridNav = symbol === Clutter.KEY_Right ||
+                symbol === Clutter.KEY_Left ||
+                symbol === Clutter.KEY_Down ||
+                symbol === Clutter.KEY_Page_Down ||
+                symbol === Clutter.KEY_Up ||
+                symbol === Clutter.KEY_Page_Up ||
+                symbol === Clutter.KEY_Home ||
+                symbol === Clutter.KEY_End;
+            if (sel < 0 && isGridNav) {
+                /* Nothing highlighted yet: Down/Right/Home land on the
+                   first item, Up/Left/Page keys on the last one. */
+                if (symbol === Clutter.KEY_Left || symbol === Clutter.KEY_Up ||
+                    symbol === Clutter.KEY_Page_Up ||
+                    symbol === Clutter.KEY_End)
+                    sel = items.length - 1;
+                else
+                    sel = 0;
+                moved = true;
+            } else if (symbol === Clutter.KEY_Right) {
                 sel = (sel + 1) % items.length;
                 moved = true;
             } else if (symbol === Clutter.KEY_Left) {
@@ -1684,6 +1731,7 @@ this._ghost = null;
             }
             if (moved) {
                 this._gridSel = sel;
+                this._gridTouched = true;
                 this._gridHighlight();
                 return Clutter.EVENT_STOP;
             }
@@ -2904,8 +2952,7 @@ this._ghost = null;
                 return Clutter.EVENT_STOP;
             });
             cell.box.connect('enter-event', () => {
-                this._gridSel = idx;
-                this._gridHighlight();
+                this._gridHover(idx);
                 return Clutter.EVENT_PROPAGATE;
             });
             this._gridCells.push(cell);
@@ -2931,6 +2978,30 @@ this._ghost = null;
         }
     }
 
+    /* Mouse hover on a grid cell — but only when the pointer really
+       moved. Typing re-renders the grid under a stationary cursor and
+       fires enter events without the user moving anything; those must
+       not highlight or select. A genuine move highlights the cell and
+       counts as an explicit pick, so the highlight always tells the
+       truth about what Enter will do. */
+    _gridHover(idx) {
+        let xy = null;
+        try {
+            xy = global.get_pointer();
+        } catch (e) {
+            /* headless/test: no pointer to compare */
+        }
+        if (xy && this._lastPointer &&
+            xy[0] === this._lastPointer[0] && xy[1] === this._lastPointer[1]) {
+            return;
+        }
+        if (xy)
+            this._lastPointer = [xy[0], xy[1]];
+        this._gridSel = idx;
+        this._gridTouched = true;
+        this._gridHighlight();
+    }
+
     _gridHighlight() {
         for (let i = 0; i < this._gridCells.length; i++) {
             const cell = this._gridCells[i];
@@ -2943,12 +3014,30 @@ this._ghost = null;
         }
     }
 
+    /* Open the folder currently shown in the `ls` grid in the file
+       manager. Used when Enter lands with no explicitly picked cell.
+       Returns true when it did something. */
+    _openLsFolder() {
+        const dirPath = this._gridData && this._gridData.dirPath;
+        if (!dirPath) {
+            return false;
+        }
+        try {
+            openUri(Gio.File.new_for_path(dirPath).get_uri());
+        } catch (e) {
+            return false;
+        }
+        this.close();
+        return true;
+    }
+
     _gridActivate(idx) {
         const it = this._gridData && this._gridData.items &&
             this._gridData.items[idx] ? this._gridData.items[idx] : null;
         if (!it) {
-            this.close();
-            return;
+            /* No cell there (e.g. Enter with nothing highlighted and no
+               folder to open): do nothing, never nuke the panel. */
+            return Clutter.EVENT_PROPAGATE;
         }
         if (it.isDir) {
             /* Open the folder inside Spotlight: remember the current level so
@@ -3213,6 +3302,20 @@ _renderLsPick(data) {
         }
         this._gridData = data;
         this._lsNav = 'grid';
+        /* Fresh grid (typed, drilled-in, or Esc-back): nothing explicitly
+           picked yet, so Enter opens this folder itself. */
+        this._gridTouched = false;
+        /* No cell starts highlighted — highlight appears only after an
+           explicit arrow-key move or a real mouse move onto a cell.
+           Baseline the pointer here so a stationary cursor sitting
+           where the fresh grid renders doesn't fake a hover. */
+        this._gridSel = -1;
+        try {
+            const xy = global.get_pointer();
+            this._lastPointer = xy ? [xy[0], xy[1]] : null;
+        } catch (e) {
+            /* headless/test: no pointer to baseline */
+        }
         this._selected = 0;
         this._hovered = -1;
         if (!data.found) {
@@ -3247,7 +3350,7 @@ _renderLsPick(data) {
         this._gridHighlight();
         this._lsGrid.visible = true;
         this._gridActive = true;
-        this._footer.text = `Grid · ${data.items.length} items    ←↑↓→ Navigate    ↵ Open    Tab Complete    Esc Close`;
+        this._footer.text = `Grid · ${data.items.length} items    ↵ Open folder · ←↑↓→ Pick item    Tab Complete    Esc Close`;
     }
 
     _setGridRowsVisible(count, cols) {
