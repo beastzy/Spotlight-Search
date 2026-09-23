@@ -35,5 +35,5 @@ if command -v gnome-extensions >/dev/null 2>&1; then
 fi
 
 echo
-echo "Done. Press $'"'"'Super+Space'"'"' to open Spotlight Search."
+echo "Done. Press 'Super+Space' to open Spotlight Search."
 echo "If it does not appear, log out and back in, then enable it in GNOME Extensions."
