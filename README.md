@@ -55,10 +55,16 @@ Press **Super+Space** and an overlay slides in above your top bar, where you can
 
 1. Download the latest `spotlight-search@umar.local.zip` from the [Releases](https://github.com/beastzy/Spotlight-Search/releases) page.
 2. Run the install.sh script
+3. Log out and back in (or press **Alt+F2**, type `r` and Enter on X11), then enable it:
 
-or 
+   ```bash
+   gnome-extensions enable spotlight-search@umar.local
+   ```
 
-2. Extract the zip and it place it where GNOME Shell loads extensions from:
+### 2. From GitHub and Manual Install
+
+1. Download the latest `spotlight-search@umar.local.zip` from the [Releases](https://github.com/beastzy/Spotlight-Search/releases) page
+2. Extract the zip and it place it where GNOME Shell loads extensions manually or run the command:
 
    ```bash
    mkdir -p ~/.local/share/gnome-shell/extensions
@@ -72,8 +78,7 @@ or
    ```bash
    gnome-extensions enable spotlight-search@umar.local
    ```
-
-### 2. From source
+### 3. From source
 
 ```bash
 git clone https://github.com/beastzy/Spotlight-Search.git
