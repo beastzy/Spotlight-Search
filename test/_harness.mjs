@@ -167,7 +167,16 @@ const CLUTTER = {Orientation: {VERTICAL: 1, HORIZONTAL: 2}, Event: {event_type: 
 const META = {KeyBindingFlags: {NONE: 0}, KeyBindingAction: {NONE: 0},
     SideEffect: {NONE: 0}, StartupNotificationId: {}, Display: {}};
 const SHELL = {ActionMode: {ALL: 0, SYSTEM_MODAL: 1}, AppSystem: {get_default: () => ({connect: () => 1})}};
-const PANGO = {AttrList: class {insert() {}}, Style: {ITALIC: 2}, attr_style_new: () => ({}), attr_foreground_new: () => ({})};
+const PANGO = {
+    AttrList: class {
+        constructor() { this.items = []; }
+        insert(a) { this.items.push(a); }
+    },
+    Style: {ITALIC: 2},
+    EllipsizeMode: {END: 3},
+    attr_style_new: (style, start, end) => ({kind: 'style', style, start_index: start, end_index: end}),
+    attr_foreground_new: (r, g, b) => ({kind: 'fg', r, g, b}),
+};
 const MAIN = {
     notify: (t, b) => calls.notify.push([t, b]),
     pushModal: () => 1, popModal: () => {}, wm: {}, layoutManager: {uiGroup: {add_child(){}, remove_child(){}}},

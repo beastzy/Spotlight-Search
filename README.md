@@ -10,6 +10,13 @@ Press **Super+Space** and an overlay slides in above your top bar, where you can
   <img src="https://img.shields.io/badge/license-GPL--3.0-green" alt="GPL-3.0">
 </p>
 
+## What's new in v1.2
+
+- **Breadcrumb address bar** — open a folder with `ls` and a path strip (`ls > documents > ABDM`) appears under the search field. Click any crumb to jump straight back to that level.
+- **Esc walks out, level by level** — each `Esc` steps back one folder (`ls > ABDM` → `ls > …`), then back to the picker, then to plain results. No more blank screens mid-walk, and the crumb fully clears when you close Spotlight.
+- **Lighter on the system** — the clipboard-poll timer now cancels when the extension is disabled, and the breadcrumb is reset on close instead of lingering.
+- **Fixed the double-traced path** — the crumb root now shows just the folder's basename (`ABDM`, not the full `/home/…/ABDM`), so the trail no longer repeats.
+
 ## Features
 
 - **Apps** — instant, usage-ranked application search with icons and descriptions.

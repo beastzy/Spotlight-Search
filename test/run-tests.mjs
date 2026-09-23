@@ -428,18 +428,21 @@ check('ls: lists folder contents, folders first, activates item', () => {
     try {
         const inst = SptInstance({get_strv: () => []});
         inst.close = () => { calls.lsClosed = true; };
-        const rows = inst._lsRows('docs');
-        assert.strictEqual(rows.length, 2);
-        assert.strictEqual(rows[0].label, 'sub');
-        assert.strictEqual(rows[0].icon, 'folder');
-        assert.strictEqual(rows[1].label, 'a.txt');
-        assert.strictEqual(rows[1].group, 'ls');
+        const data = inst._lsDirItems('docs');
+        assert.strictEqual(data.found, true, 'folder resolved');
+        assert.strictEqual(data.dirPath, '/home/test/docs');
+        assert.strictEqual(data.items.length, 2);
+        assert.strictEqual(data.items[0].name, 'sub');
+        assert.strictEqual(data.items[0].isDir, true);
+        assert.strictEqual(data.items[1].name, 'a.txt');
+        assert.ok(data.items[1].uri.startsWith('file://'));
         calls.uris = [];
-        rows[1].activate.call(inst);
-        assert.ok(calls.uris.includes('file:///home/test/docs/a.txt'), 'opens item');
+        inst._gridData = data;
+        inst._gridActivate(1);
+        assert.ok(calls.uris.includes(data.items[1].uri), 'opens item');
         assert.ok(calls.lsClosed, 'closes search');
-        assert.strictEqual(inst._lsRows('docs/sub').length, 1);
-        assert.ok(inst._lsRows('docs/sub')[0].label === 'Empty folder');
+        assert.strictEqual(inst._lsDirItems('docs/sub').items.length, 0);
+        assert.strictEqual(inst._lsDirItems('docs/sub').found, true);
     } finally {
         setLsFs(null);
     }
@@ -461,6 +464,29 @@ check('ls: folder resolution — home, direct, case-insensitive, absolute, missi
         assert.strictEqual(inst._findFolder('downloads'), '/home/test/DOWNLOADS');
         assert.strictEqual(inst._findFolder('/etc/conf'), '/etc/conf');
         assert.strictEqual(inst._findFolder('nonexistent'), null);
+        const prefixed = new Map([
+            ['/home/test', [
+                {name: 'HyperFluent-GNOME-Theme', isDir: true},
+                {name: 'hoops', isDir: true},
+                {name: 'docs', isDir: true},
+            ]],
+            ['/home/test/HyperFluent-GNOME-Theme', [{name: 'r.txt', isDir: false}]],
+            ['/home/test/hoops', [{name: 'b.txt', isDir: false}]],
+            ['/home/test/docs', [{name: 'a.txt', isDir: false}]],
+        ]);
+        setLsFs(prefixed);
+        assert.strictEqual(inst._findFolder('h'), '/home/test/hoops',
+            'partial fragment resolves to the alphabetically-first match');
+        assert.strictEqual(inst._findFolder('HY'), '/home/test/HyperFluent-GNOME-Theme',
+            'case-insensitive prefix narrows to the right folder');
+        assert.strictEqual(inst._findFolder('docs'), '/home/test/docs',
+            'exact names still win');
+        const grid = inst._lsDirItems('h');
+        assert.strictEqual(grid.found, true, 'prefix grid resolves');
+        assert.strictEqual(grid.dirPath, '/home/test/hoops');
+        assert.strictEqual(grid.items.length, 1);
+        assert.strictEqual(inst._findFolder('HyperFluent-GNOME-Theme'),
+            '/home/test/HyperFluent-GNOME-Theme');
     } finally {
         setLsFs(null);
     }
@@ -476,38 +502,327 @@ check('ls: bounded recursive search finds nested folder', () => {
         const inst = SptInstance({get_strv: () => []});
         assert.strictEqual(inst._findFolder('src'), '/home/test/work/src');
         assert.strictEqual(inst._findFolder('x.log'), null);
+        assert.strictEqual(inst._lsDirItems('nope').found, false);
+        assert.strictEqual(inst._lsDirItems('').found, false);
+        assert.strictEqual(inst._lsDirItems('  ').found, false);
     } finally {
         setLsFs(null);
     }
 });
-check('ls: missing folder and empty query give hint rows', () => {
+check('ls: grid column count derives from panel width', () => {
+    const inst = SptInstance({get_strv: () => []});
+    assert.strictEqual(inst._gridCols(), 5, 'default 640px -> 5 cols');
+    inst._settings = {get_int: () => 1340};
+    assert.strictEqual(inst._gridCols(), 8, 'wide panel capped at 8');
+    inst._settings = {get_int: () => 200};
+    assert.strictEqual(inst._gridCols(), 2, 'narrow panel floored at 2');
+    inst._settings = {get_int: () => { throw new Error('boom'); }};
+    assert.strictEqual(inst._gridCols(), 5, 'fallback to default on error');
+});
+check('ls: autocomplete picks first alphabetical matching folder', () => {
+    const fs = new Map([
+        ['/home/test', [
+            {name: 'zebra', isDir: true}, {name: 'Archive', isDir: true},
+            {name: 'notes.txt', isDir: false}, {name: 'readme', isDir: true},
+        ]],
+    ]);
+    setLsFs(fs);
+    try {
+        const inst = SptInstance({get_strv: () => []});
+        const c = inst._lsComplete('arc');
+        assert.strictEqual(c.full, 'Archive');
+        assert.strictEqual(c.tail, 'hive');
+        assert.strictEqual(inst._lsComplete('zebra'), null, 'exact match -> null');
+        assert.strictEqual(inst._lsComplete('note'), null, 'files ignored');
+        assert.strictEqual(inst._lsComplete('read').full, 'readme');
+        assert.strictEqual(inst._lsComplete('a/b'), null,
+            'unresolvable directory part -> null');
+        assert.strictEqual(inst._lsComplete(' a'), null, 'leading space excluded');
+        assert.strictEqual(inst._lsComplete(''), null, 'empty fragment');
+    } finally {
+        setLsFs(null);
+    }
+});
+check('ls: autocomplete works for nested folders and path-qualified names', () => {
+    const fs = new Map([
+        ['/home/test', [
+            {name: 'work', isDir: true}, {name: 'docs', isDir: true},
+        ]],
+        ['/home/test/work', [
+            {name: 'src', isDir: true}, {name: 'Assets', isDir: true},
+            {name: 'notes.txt', isDir: false},
+        ]],
+        ['/home/test/work/src', [{name: 'node_modules', isDir: true}]],
+    ]);
+    setLsFs(fs);
+    try {
+        const inst = SptInstance({get_strv: () => []});
+        /* nested folder, unanchored fragment: found anywhere in the tree */
+        const a = inst._lsComplete('sr');
+        assert.strictEqual(a.full, 'src');
+        assert.strictEqual(a.tail, 'c');
+        assert.strictEqual(inst._findFolder('sr'), '/home/test/work/src',
+            'Enter resolves the same nested partial');
+        assert.strictEqual(inst._lsDirItems('sr').found, true,
+            'nested partial grid resolves');
+        assert.strictEqual(inst._lsDirItems('sr').dirPath,
+            '/home/test/work/src');
+        /* path-qualified completion */
+        const b = inst._lsComplete('work/sr');
+        assert.strictEqual(b.full, 'work/src');
+        assert.strictEqual(b.tail, 'c');
+        const c = inst._lsComplete('work/ass');
+        assert.strictEqual(c.full, 'work/Assets');
+        assert.strictEqual(c.tail, 'ets');
+        /* complete name (even nested) -> nothing to suggest */
+        assert.strictEqual(inst._lsComplete('work/src'), null);
+        /* files skipped; bogus/incomplete dir parts rejected */
+        assert.strictEqual(inst._lsComplete('work/notes'), null);
+        assert.strictEqual(inst._lsComplete('nope/x'), null);
+        /* ~ shorthand resolves the same way */
+        const d = inst._lsComplete('~/work/sr');
+        assert.strictEqual(d.full, '~/work/src');
+        assert.strictEqual(d.tail, 'c');
+    } finally {
+        setLsFs(null);
+    }
+});
+check('ls: same-name folders show a picker with short paths', () => {
+    const fs = new Map([
+        ['/home/test', [
+            {name: 'proj', isDir: true}, {name: 'docs', isDir: true},
+        ]],
+        ['/home/test/proj', [{name: 'src', isDir: true}]],
+        ['/home/test/docs', [{name: 'src', isDir: true}]],
+        ['/home/test/proj/src', [{name: 'a.txt', isDir: false}]],
+    ]);
+    setLsFs(fs);
+    try {
+        const inst = SptInstance({get_strv: () => []});
+        const d = inst._lsDirItems('src');
+        assert.strictEqual(d.found, true);
+        assert.strictEqual(d.items, null, 'picker list instead of a grid');
+        assert.strictEqual(d.multi.length, 2);
+        assert.strictEqual(d.multi[0].path, '/home/test/docs/src',
+            'sorted by path');
+        assert.strictEqual(d.multi[1].path, '/home/test/proj/src');
+        /* exact-name duplicates suppress the ghost: no single best */
+        assert.strictEqual(inst._lsComplete('src'), null);
+        /* a single same-name folder keeps the normal grid resolution */
+        const single = new Map([
+            ['/home/test', [{name: 'docs', isDir: true}]],
+            ['/home/test/docs', [{name: 'src', isDir: true}]],
+            ['/home/test/docs/src', []],
+        ]);
+        setLsFs(single);
+        assert.strictEqual(inst._lsDirItems('src').multi, undefined);
+        assert.strictEqual(inst._lsDirItems('src').dirPath,
+            '/home/test/docs/src');
+        /* display path = last 3 directories only */
+        assert.strictEqual(inst._shortFolderPath('/home/test/proj/src'),
+            'test/proj/src');
+        assert.strictEqual(inst._shortFolderPath('/a/b/c/d/src'),
+            'c/d/src');
+        assert.strictEqual(inst._shortFolderPath('/home/x'), 'home/x');
+        /* path-qualified names never trigger the picker */
+        setLsFs(fs);
+        assert.strictEqual(inst._findFolder('proj/src'),
+            '/home/test/proj/src');
+    } finally {
+        setLsFs(null);
+    }
+});
+check('ls: deep release folders are discovered (depth 4) and listed', () => {
+    const fs = new Map([
+        ['/home/test', [
+            {name: 'Downloads', isDir: true}, {name: 'proj', isDir: true},
+        ]],
+        ['/home/test/Downloads', [{name: 'ABDM', isDir: true}]],
+        ['/home/test/Downloads/ABDM', [{name: 'Compressed', isDir: true}]],
+        ['/home/test/Downloads/ABDM/Compressed', [
+            {name: 'MacTahoe-icon-theme-2026', isDir: true},
+        ]],
+        ['/home/test/Downloads/ABDM/Compressed/MacTahoe-icon-theme-2026', [
+            {name: 'release', isDir: true},
+        ]],
+        ['/home/test/proj', [{name: 'release', isDir: true}]],
+    ]);
+    setLsFs(fs);
+    try {
+        const inst = SptInstance({get_strv: () => []});
+        const found = inst._findFolders('release');
+        assert.strictEqual(found.length, 2, 'deep + shallow both found');
+        assert.strictEqual(found[0].path,
+            '/home/test/Downloads/ABDM/Compressed/' +
+            'MacTahoe-icon-theme-2026/release');
+        assert.strictEqual(found[1].path, '/home/test/proj/release');
+        const d = inst._lsDirItems('release');
+        assert.strictEqual(d.found, true);
+        assert.strictEqual(d.multi.length, 2);
+        assert.strictEqual(inst._shortFolderPath(found[0].path),
+            'Compressed/MacTahoe-icon-theme-2026/release');
+    } finally {
+        setLsFs(null);
+    }
+});
+check('ls: no ghost in the buffer; Tab completion candidate tracked', () => {
+    const fs = new Map([
+        ['/home/test', [
+            {name: 'Documents', isDir: true}, {name: 'Downloads', isDir: true},
+        ]],
+    ]);
+    setLsFs(fs);
+    try {
+        const inst = SptInstance({get_strv: () => []});
+        inst._markupLock = false;
+        inst._hotWordMarkup = null;
+        let attrs = null;
+        let caretSet = false;
+        let setText = null;
+        inst._entry = {
+            text: 'ls Do',
+            get_theme_node: () => null,
+            clutter_text: {
+                cursor_position: 5,
+                set_attributes: a => { attrs = a; },
+                set_cursor_position: () => { caretSet = true; },
+                set_text: t => { setText = t; },
+            },
+        };
+        inst._applyHotWordStyle();
+        assert.strictEqual(inst._hotWordMarkup, 'ls');
+        assert.strictEqual(setText, null, 'entry buffer untouched');
+        assert.strictEqual(caretSet, false, 'caret untouched');
+        assert.strictEqual(inst._entry.text, 'ls Do', 'typed text preserved verbatim');
+        const style = attrs.items.find(a => a.kind === 'style');
+        assert.strictEqual(style.style, 2, 'italic attr present');
+        assert.strictEqual(style.start_index, 0, 'bounded to the ls word');
+        assert.strictEqual(style.end_index, 2, 'covers only "ls"');
+        assert.ok(!attrs.items.some(a => a.kind === 'fg' && a.r === 138 * 257),
+            'no faint tail attr while typing');
+        const g = inst._ghost;
+        assert.strictEqual(g.pre, '');
+        assert.strictEqual(g.frag, 'Do');
+        assert.strictEqual(g.full, 'Documents');
+        assert.strictEqual(g.tail, 'cuments');
+        inst._commitGhost();
+        assert.strictEqual(inst._entry.text, 'ls Documents', 'Tab commits the name');
+    } finally {
+        setLsFs(null);
+    }
+});
+check('ls: typing "ls" alone stays "ls" so backspace removes it', () => {
     const inst = SptInstance({get_strv: () => []});
     setLsFs(null);
-    const miss = inst._lsRows('nope');
-    assert.ok(miss[0].label.startsWith('No folder'));
-    const hint = inst._lsRows('');
-    assert.ok(hint[0].label.includes('List a folder'));
-    assert.ok(hint[0].sublabel.includes('ls home'));
+    inst._markupLock = false;
+    inst._hotWordMarkup = null;
+    let attrs = null;
+    let caret = -1;
+    let setText = null;
+    inst._entry = {
+        text: 'ls',
+        get_theme_node: () => null,
+        clutter_text: {
+            cursor_position: 2,
+            set_attributes: a => { attrs = a; },
+            set_cursor_position: n => { caret = n; },
+            set_text: t => { setText = t; },
+        },
+    };
+    inst._applyHotWordStyle();
+    assert.strictEqual(setText, null, 'no phantom space forced');
+    assert.strictEqual(inst._entry.text, 'ls');
+    assert.strictEqual(inst._lsUser, '');
+    assert.strictEqual(caret, -1, 'caret never moved');
+    assert.ok(attrs.items.some(a => a.kind === 'style' && a.style === 2), 'ls italicized');
+    /* backspace: "ls" -> "l" leaves the branch entirely */
+    inst._entry.text = 'l';
+    inst._entry.clutter_text.cursor_position = 1;
+    inst._hotWordMarkup = 'ls';
+    inst._applyHotWordStyle();
+    assert.strictEqual(inst._hotWordMarkup, null, 'resets styling');
+    assert.strictEqual(inst._lsUser, null);
+    assert.strictEqual(inst._ghost, null);
+});
+check('ls: entry text is never modified while typing a fragment', () => {
+    const fs = new Map([
+        ['/home/test', [
+            {name: 'HooperFluent-GNOME-Theme', isDir: true},
+            {name: 'Documents', isDir: true}, {name: 'Downloads', isDir: true},
+        ]],
+    ]);
+    setLsFs(fs);
+    try {
+        const inst = SptInstance({get_strv: () => []});
+        inst._markupLock = false;
+        inst._hotWordMarkup = null;
+        let buf = '';
+        let caret = 0;
+        const entry = {clutter_text: {}};
+        entry.get_theme_node = () => null;
+        entry.clutter_text.set_text = t => { buf = t; };
+        entry.clutter_text.set_attributes = () => {};
+        entry.clutter_text.set_cursor_position = n => { caret = n; };
+        Object.defineProperty(entry.clutter_text, 'cursor_position',
+            {get: () => caret, configurable: true});
+        Object.defineProperty(entry, 'text', {
+            get: () => buf,
+            set: v => { buf = v; caret = v.length; },
+            configurable: true,
+        });
+        inst._entry = entry;
+        const type = ch => {
+            buf = buf.slice(0, caret) + ch + buf.slice(caret);
+            caret += ch.length;
+            inst._applyHotWordStyle();
+        };
+        for (const ch of 'ls ho') type(ch);
+        assert.strictEqual(buf, 'ls ho', 'entry tracked the Tab candidate, text untouched');
+        assert.strictEqual(inst._ghost.full, 'hooperFluent-GNOME-Theme',
+            'candidate kept for Tab');
+        for (const ch of 'm') type(ch);
+        assert.strictEqual(buf, 'ls hom', 'continuing types cleanly');
+        assert.strictEqual(inst._ghost, null, 'no candidate for "hom"');
+        for (const ch of 'e') type(ch);
+        assert.strictEqual(buf, 'ls home', 'typed text intact');
+    } finally {
+        setLsFs(null);
+    }
 });
 check('ls: entry italic styling applies only to the "ls" prefix', () => {
     const inst = SptInstance({get_strv: () => []});
-    inst._hotWordColor = null;
     inst._markupLock = false;
     let attrs = null;
+    let caret = -1;
+    let setText = null;
     inst._entry = {
         text: 'ls home',
         get_theme_node: () => null,
-        clutter_text: {set_attributes: a => { attrs = a; }},
+        clutter_text: {
+            cursor_position: 8,
+            set_attributes: a => { attrs = a; },
+            set_cursor_position: n => { caret = n; },
+            set_text: t => { setText = t; },
+        },
     };
-    inst._hotWordMarkup = false;
+    inst._hotWordMarkup = null;
     inst._applyHotWordStyle();
-    assert.notStrictEqual(inst._hotWordMarkup, false);
     assert.strictEqual(inst._hotWordMarkup, 'ls');
-    assert.notStrictEqual(attrs, null);
+assert.strictEqual(setText, null, 'no buffer rewrite for plain query');
+    const style = attrs.items.find(a => a.kind === 'style');
+    assert.strictEqual(style.style, 2, 'italic bound to the ls word');
+    assert.strictEqual(style.start_index, 0);
+    assert.strictEqual(style.end_index, 2);
+    assert.strictEqual(caret, -1, 'caret never moved');
+    assert.ok(!attrs.items.some(a => a.kind === 'fg' && a.r === 138 * 257),
+        'no ghost tail in plain query');
     inst._entry.text = 'fire';
+    inst._entry.clutter_text.cursor_position = 4;
     inst._hotWordMarkup = 'ls';
     inst._applyHotWordStyle();
-    assert.strictEqual(inst._hotWordMarkup, false);
+    assert.strictEqual(inst._hotWordMarkup, null, 'styling reset when ls no longer recognized');
+    assert.strictEqual(inst._ghost, null, 'ghost cleared on non-ls text');
+    assert.strictEqual(inst._lsUser, null, 'lsUser cleared on non-ls text');
 });
 
 /* ============ report ============ */
