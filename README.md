@@ -54,7 +54,11 @@ Press **Super+Space** and an overlay slides in above your top bar, where you can
 ### 1. From a GitHub release (easiest)
 
 1. Download the latest `spotlight-search@umar.local.zip` from the [Releases](https://github.com/beastzy/Spotlight-Search/releases) page.
-2. Extract and it place it where GNOME Shell loads extensions from:
+2. Run the install.sh script
+
+or 
+
+2. Extract the zip and it place it where GNOME Shell loads extensions from:
 
    ```bash
    mkdir -p ~/.local/share/gnome-shell/extensions
