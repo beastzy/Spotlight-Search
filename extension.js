@@ -3553,6 +3553,20 @@ _renderLsPick(data) {
         const lsText = this._lsUser ? `ls ${this._lsUser}` : ptext;
         const lsSpec = lsText.match(/^ls(?:[ \t]+(.+))?$/i);
         if (lsSpec) {
+            /* Gone-with-the-name: the instant the folder arg leaves — bare `ls`,
+               `ls `, or the whole bar empty — the spec no longer resolves a grid.
+               Because `lsSpec` itself stays truthy for `ls `, this must unwind
+               HERE (before any render) or the `undefined` folder throws and the
+               catch turns it into an error row — leaving the crumb up with
+               nothing typed. This is what clears the path on erase. */
+            if (lsSpec[1] === undefined) {
+                this._lsNav = 'results';
+                this._lsGridNest = [];
+                this._lsPickRestore = null;
+                if (this._lsCrumb)
+                    this._lsCrumb.visible = false;
+                return;
+            }
             try {
                 this._renderGrid(this._lsDirItems(lsSpec[1]));
             } catch (e) {
@@ -3570,6 +3584,22 @@ _renderLsPick(data) {
                 }
             }
             return;
+        }
+
+        /* The `ls` pathing is only valid while the spec still carries a folder
+           arg. The moment you erase the name — stopping at `ls` or `ls ` — or
+           clear the whole bar, the grid must unwind exactly like Esc-to-results
+           does. Keying on `lsSpec[1]` (not just `q === ''`) makes the crumb
+           vanish as soon as the folder name leaves, even with `ls` still typed. */
+        if (this._lsNav === 'grid' || this._lsNav === 'picker') {
+            if (!(lsSpec && lsSpec[1])) {
+                this._lsNav = 'results';
+                this._lsGridNest = [];
+                this._lsPickRestore = null;
+                if (this._lsCrumb)
+                    this._lsCrumb.visible = false;
+                return;
+            }
         }
 
         if (q === '') {
