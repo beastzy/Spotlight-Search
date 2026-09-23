@@ -1,6 +1,6 @@
 /* Spotlight Search — a macOS/Spotlight-style quick launcher for GNOME Shell.
  * Targets GNOME 45+ (ES modules).
- * Version: 1.0
+ * Version: 1.2
  */
 
 import Gio from 'gi://Gio';
@@ -20,56 +20,6 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
  * ------------------------------------------------------------------ */
 
 const BINDING_NAME = 'toggle-shortcut';
-const LOG_PATH = `${GLib.get_home_dir()}/.local/share/spotlight-search.log`;
-
-/* Per-keystroke debug logging is expensive (string allocation + disk
- * churn), so it is compiled out unless explicitly enabled. */
-const _DEBUG = false;
-
-/* ------------------------------------------------------------------ *
- * Logging — batched in memory, flushed to disk at most every ~2 s,
- * log file capped at 4 MB so logging can never jank the shell.
- * ------------------------------------------------------------------ */
-
-let _logBuf = [];
-let _logTimer = 0;
-
-function _logFlush() {
-    _logTimer = 0;
-    if (_logBuf.length === 0)
-        return;
-    try {
-        const chunk = _logBuf.join('');
-        _logBuf = [];
-        if (GLib.file_test(LOG_PATH, GLib.FileTest.EXISTS) &&
-            GLib.get_file_size(LOG_PATH) > 4 * 1024 * 1024)
-            GLib.remove(LOG_PATH);
-        const os = Gio.File.new_for_path(LOG_PATH)
-            .append_to(Gio.FileCreateFlags.NONE, null)
-            .get_output_stream();
-        os.write_all(chunk, null);
-        os.close(null);
-    } catch (e) {
-        /* logging must never break the extension */
-    }
-}
-
-function spotLog(msg) {
-    if (!_DEBUG)
-        return;
-    _logBuf.push(new Date().toISOString() + ' ' + msg + '\n');
-    if (_logBuf.length >= 500) {
-        _logFlush();
-        return;
-    }
-    if (_logTimer === 0) {
-        _logTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT_IDLE, 2, () => {
-            _logTimer = 0;
-            _logFlush();
-            return GLib.SOURCE_REMOVE;
-        });
-    }
-}
 
 /* ------------------------------------------------------------------ *
  * Themes
@@ -303,7 +253,7 @@ const SYSTEM_ACTIONS = [
             try {
                 Main.overview.toggle();
             } catch (e) {
-                spotLog(`overview action: ERROR ${e}`);
+                /* ignore */
             }
         },
     },
@@ -318,7 +268,7 @@ const SYSTEM_ACTIONS = [
                     '/org/gnome/Shell/Screenshot', 'org.gnome.Shell.Screenshot',
                     'Screenshot', new GLib.Variant('(bs)', [true, '']));
             } catch (e) {
-                spotLog(`screenshot action: ERROR ${e}`);
+                /* ignore */
             }
         },
     },
@@ -340,7 +290,7 @@ const SYSTEM_ACTIONS = [
                     '/org/gnome/DisplayManager', 'org.gnome.DisplayManager.Manager',
                     'SwitchToUser', new GLib.Variant('(s)', ['']));
             } catch (e) {
-                spotLog(`user switch action: ERROR ${e}`);
+                /* ignore */
             }
         },
     },
@@ -392,7 +342,7 @@ function launchByDesktopId(id) {
             if (info)
                 return info.launch([], null);
         } catch (e) {
-            spotLog(`launchByDesktopId: ${path} ERROR ${e}`);
+            /* ignore */
         }
     }
     return false;
@@ -750,7 +700,7 @@ class FileSearch {
             try {
                 this._proc.force_exit();
             } catch (e) {
-                spotLog(`FileSearch.cancel ERROR ${e}`);
+                /* ignore */
             }
             this._proc = null;
         }
@@ -798,7 +748,6 @@ class FileSearch {
                 Gio.SubprocessFlags.STDOUT_PIPE |
                 Gio.SubprocessFlags.STDERR_SILENCE);
         } catch (e) {
-            spotLog(`FileSearch: spawn ERROR ${e}`);
             return;
         }
         this._proc = proc;
@@ -823,7 +772,7 @@ class FileSearch {
                         if (onDone)
                             onDone(count);
                     } catch (e) {
-                        spotLog(`FileSearch: onDone ERROR ${e}`);
+                        /* ignore */
                     }
                     return;
                 }
@@ -838,7 +787,7 @@ class FileSearch {
                 try {
                     onMatch(Gio.File.new_for_path(path));
                 } catch (e) {
-                    spotLog(`FileSearch: onMatch ERROR ${e}`);
+                    /* ignore */
                 }
                 if (count >= this._maxMatches) {
                     this.cancel();
@@ -846,7 +795,7 @@ class FileSearch {
                         if (onDone)
                             onDone(count);
                     } catch (e) {
-                        spotLog(`FileSearch: onDone ERROR ${e}`);
+                        /* ignore */
                     }
                     return;
                 }
@@ -865,7 +814,6 @@ export default class SpotlightSearchExtension extends Extension {
     /* ----- lifecycle -------------------------------------------------- */
 
     enable() {
-        spotLog('enable(): begin');
         try {
             this._settings = this.getSettings();
 
@@ -904,7 +852,6 @@ export default class SpotlightSearchExtension extends Extension {
                 try {
                     this._clip = St.Clipboard.get_default();
                 } catch (e) {
-                    spotLog(`clipboard watch: setup ERROR ${e}`);
                     this._clip = null;
                 }
             }
@@ -918,8 +865,6 @@ export default class SpotlightSearchExtension extends Extension {
                     this.toggle();
                     return Clutter.EVENT_STOP;
                 });
-            spotLog(`enable(): addKeybinding returned action=${action} ` +
-                `(NONE=${Meta.KeyBindingAction.NONE})`);
             this._settingsChangedId =
                 this._settings.connect(`changed::${BINDING_NAME}`, () => {
                     Main.wm.removeKeybinding(BINDING_NAME);
@@ -930,7 +875,6 @@ export default class SpotlightSearchExtension extends Extension {
                             this.toggle();
                             return Clutter.EVENT_STOP;
                         });
-                    spotLog(`enable(): keybinding re-registered on change action=${reAction}`);
                 });
             this._appearanceChangedId =
                 this._settings.connect('changed', (settings, key) => {
@@ -947,7 +891,7 @@ export default class SpotlightSearchExtension extends Extension {
                         this._applyPanelStyle(
                             global.display.get_monitor_geometry(monitor));
                     } catch (e) {
-                        spotLog(`appearance change: ERROR ${e}`);
+                        /* ignore */
                     }
                 });
             this._appSystemChangedId = Shell.AppSystem.get_default().connect(
@@ -957,15 +901,12 @@ export default class SpotlightSearchExtension extends Extension {
                     this._freqCache = new Map();
                 });
 
-            spotLog('enable(): done');
         } catch (e) {
-            spotLog(`enable(): ERROR ${e}`);
             throw e;
         }
     }
 
     disable() {
-        spotLog('disable(): begin');
         this._cancelDebounce();
         this.close();
         if (this._fileSearch)
@@ -982,7 +923,7 @@ export default class SpotlightSearchExtension extends Extension {
             try {
                 this._suggestCancel.cancel();
             } catch (e) {
-                spotLog(`disable(): suggest cancel ERROR ${e}`);
+                /* ignore */
             }
             this._suggestCancel = null;
         }
@@ -1006,7 +947,6 @@ export default class SpotlightSearchExtension extends Extension {
             this._overlay = null;
         }
         this._settings = null;
-        spotLog('disable(): done');
     }
 
     /* ----- open / close / toggle -------------------------------------- */
@@ -1019,8 +959,6 @@ export default class SpotlightSearchExtension extends Extension {
     }
 
     open() {
-        spotLog('open(): begin');
-        _logFlush();
         try {
             if (!this._overlay || this._overlay.visible)
                 return;
@@ -1054,7 +992,7 @@ export default class SpotlightSearchExtension extends Extension {
             this._startClipWatcher();
             this._refresh();
         } catch (e) {
-            spotLog(`open(): ERROR ${e}`);
+            /* ignore */
         }
     }
 
@@ -1070,7 +1008,7 @@ export default class SpotlightSearchExtension extends Extension {
                             this._refresh();
                         }
                     } catch (e) {
-                        spotLog(`clip read: ERROR ${e}`);
+                        /* ignore */
                     }
                 });
             try {
@@ -1090,16 +1028,16 @@ export default class SpotlightSearchExtension extends Extension {
                                         this._refresh();
                                     }
                                 } catch (e) {
-                                    spotLog(`clip img: ERROR ${e}`);
+                                    /* ignore */
                                 }
                             });
                     }
                 }
             } catch (e) {
-                spotLog(`clip img: read ERROR ${e}`);
+                /* ignore */
             }
         } catch (e) {
-            spotLog(`clip read: init ERROR ${e}`);
+            /* ignore */
         }
     }
 
@@ -1121,7 +1059,7 @@ export default class SpotlightSearchExtension extends Extension {
                 try {
                     poll();
                 } catch (e) {
-                    spotLog(`clip watcher: poll ERROR ${e}`);
+                    /* ignore */
                 }
                 return GLib.SOURCE_CONTINUE;
             });
@@ -1144,6 +1082,18 @@ export default class SpotlightSearchExtension extends Extension {
         }
         this._suggestRows = [];
         this._suggestCache = null;
+this._ghost = null;
+                this._lsUser = null;
+                this._gridData = null;
+                this._gridActive = false;
+                this._lsPick = false;
+                this._updateLsGhost(null);
+        if (this._lsCrumb)
+            this._lsCrumb.visible = false;
+                if (this._lsGrid)
+            this._lsGrid.visible = false;
+        if (this._lsMsg)
+            this._lsMsg.visible = false;
         if (this._clipPollId) {
             try {
                 GLib.source_remove(this._clipPollId);
@@ -1151,6 +1101,14 @@ export default class SpotlightSearchExtension extends Extension {
                 /* ignore */
             }
             this._clipPollId = 0;
+        }
+        if (this._refineId) {
+            try {
+                GLib.source_remove(this._refineId);
+            } catch (e) {
+                /* ignore */
+            }
+            this._refineId = 0;
         }
         if (this._modalId !== null) {
             Main.popModal(this._modalId);
@@ -1188,7 +1146,7 @@ export default class SpotlightSearchExtension extends Extension {
             try {
                 this._drawBand(area.get_context());
             } catch (e) {
-                spotLog(`band repaint: ERROR ${e}`);
+                /* ignore */
             }
         });
         this._rotRad = 0;
@@ -1219,10 +1177,64 @@ export default class SpotlightSearchExtension extends Extension {
         this._entry.clutter_text.style = 'caret-color: #4A90E2;';
         entryWrap.add_child(this._entry);
         this._panel.add_child(entryWrap);
+        /* Silhouette: the `ls` completion tail as a faint label FLOATING over
+           the panel, parked at the caret. It lives OUTSIDE the entry buffer
+           (typing is never disturbed); it's added to the overlay after the
+           panel so it draws on top. Tab commits the candidate. */
+        this._lsGhost = new St.Label({
+            text: '',
+            style: 'font-size: 24px; color: rgba(255,255,255,0.30);' +
+                    'background-color: transparent;',
+            visible: false,
+            reactive: false,
+            can_focus: false,
+        });
+        this._overlay.add_child(this._lsGhost);
+
+        /* Measuring probe: a 1:1 replica of the entry's 24px font (same
+           style) used to measure the exact on-screen ink width of typed text
+           for the silhouette. Kept allocated but opacity: 0 so Clutter lays
+           it out for real; invisible, fully inert — only used as a fallback
+           caret-x source when the cursor APIs come back empty. */
+        this._ghostProbe = new St.Label({
+            text: '',
+            style: 'font-size: 24px; color: white;',
+            opacity: 0,
+            visible: true,
+            reactive: false,
+            can_focus: false,
+        });
+        this._overlay.add_child(this._ghostProbe);
 
         this._suggestion = null;
         this._hotWordMarkup = null;
         this._markupLock = false;
+        this._gridRows = [];
+        this._gridCells = [];
+        this._gridActive = false;
+        this._gridSel = 0;
+        this._ghost = null;
+        this._lsUser = null;
+        this._refineId = 0;
+        this._lsPickRows = [];
+        this._lsPick = false;
+        this._lsPickSel = 0;
+        /* Esc back-navigation state for the `ls` surfaces: _lsNav says which
+           level we're on ('results' | 'picker' | 'grid'), _lsPickRestore
+           holds the picker payload when a grid was opened from it, and
+           _lsPrevText is the non-`ls` query to return to when leaving. */
+        this._lsNav = 'results';
+        this._lsPickRestore = null;
+        /* Stack of parent grid payloads when Enter steps into a folder from
+           a grid: each layer holds the data needed to re-render the level
+           above, so Esc walks back grid → grid → … → picker → results. */
+        this._lsGridNest = [];
+        this._lsPrevText = null;
+        this._lastText = '';
+        this._lastWasLs = false;
+        /* Lazily created on first _lsEntries() call (only when the real
+           Gio mtime API exists — the test harness stubs it away). */
+        this._lsCache = null;
 
         this._separator = new St.Widget({
             style: 'min-height: 1px; background-color: rgba(255,255,255,0.09);' +
@@ -1235,6 +1247,33 @@ export default class SpotlightSearchExtension extends Extension {
             style: 'padding: 0px 6px;',
         });
         this._panel.add_child(this._results);
+
+        /* Folder address bar: a horizontal strip between the search box and
+           the grid. Each folder level becomes one clickable crumb, separated
+           by a “>”, so you can jump straight back to any ancestor the same
+           way Esc walks one grid at a time. Hidden whenever `ls` isn't the
+           active surface. */
+        this._lsCrumb = new St.BoxLayout({
+            orientation: Clutter.Orientation.HORIZONTAL,
+            style: 'padding: 6px 12px 2px 14px; min-height: 26px;',
+            reactive: true,
+            visible: false,
+        });
+        this._panel.add_child(this._lsCrumb);
+        this._lsCrumbRows = [];
+
+        this._lsGrid = new St.BoxLayout({
+            orientation: Clutter.Orientation.VERTICAL,
+            style: 'padding: 2px 8px 6px 8px;',
+            visible: false,
+        });
+        this._panel.add_child(this._lsGrid);
+        this._lsMsg = new St.Label({
+            style: 'padding: 12px 14px; font-size: 14px;' +
+                    'color: rgba(255,255,255,0.5);',
+            visible: false,
+        });
+        this._panel.add_child(this._lsMsg);
 
         this._footer = new St.Label({
             style: 'padding: 10px 14px 4px 14px; font-size: 11px;' +
@@ -1350,7 +1389,7 @@ export default class SpotlightSearchExtension extends Extension {
                 Math.round(h + mBand * 2));
             this._glowBand.queue_repaint();
         } catch (e) {
-            spotLog(`syncGlow(): ERROR ${e}`);
+            /* ignore */
         }
     }
 
@@ -1363,7 +1402,7 @@ export default class SpotlightSearchExtension extends Extension {
                 if (this._glowBand)
                     this._glowBand.queue_repaint();
             } catch (e) {
-                spotLog(`glow animation: ERROR ${e}`);
+                /* ignore */
             }
             return GLib.SOURCE_CONTINUE;
         });
@@ -1377,6 +1416,12 @@ export default class SpotlightSearchExtension extends Extension {
     }
 
     _cancelDebounce() {
+        if (this._clipPollId) {
+            try {
+                GLib.source_remove(this._clipPollId);
+            } catch (e) { /* ignore */ }
+            this._clipPollId = 0;
+        }
         if (this._debounceId) {
             GLib.source_remove(this._debounceId);
             this._debounceId = 0;
@@ -1505,6 +1550,12 @@ export default class SpotlightSearchExtension extends Extension {
     _onTextChanged() {
         if (this._markupLock)
             return;
+        const text = this._entry.text;
+        const isLs = /^\s*ls([ \t]|$)/i.test(text);
+        if (isLs && !this._lastWasLs)
+            this._lsPrevText = this._lastText;
+        this._lastWasLs = isLs;
+        this._lastText = text;
         this._applyHotWordStyle();
         this._suggestion = null;
         this._cancelDebounce();
@@ -1520,9 +1571,124 @@ export default class SpotlightSearchExtension extends Extension {
     _onKeyPress(widget, event) {
         const symbol = event.get_key_symbol();
         if (symbol === Clutter.KEY_Escape) {
+            /* `ls` back-navigation: Esc steps out of the current surface — a
+               grid opened from the picker returns to the picker, and a picker
+               or grid returns to the last non-`ls` screen. A second Esc (or
+               any Esc from plain search) closes Spotlight. */
+            if (this._lsNav === 'grid') {
+                /* Folders nest: Esc first walks out one grid level at a
+                   time, then back to the picker, then to the previous
+                   screen. */
+                if (this._lsGridNest.length) {
+                    const back = this._lsGridNest.pop();
+                    this._renderGrid({
+                        found: true,
+                        spec: back.spec,
+                        dirPath: null,
+                        items: back.items || [],
+                        multi: back.multi || undefined,
+                    });
+                    return Clutter.EVENT_STOP;
+                }
+                if (this._lsPickRestore) {
+                    const back = this._lsPickRestore;
+                    this._lsPickRestore = null;
+                    this._renderLsPick({
+                        found: true,
+                        spec: back.spec,
+                        multi: back.multi,
+                    });
+                    return Clutter.EVENT_STOP;
+                }
+            }
+            if (this._lsNav === 'picker' || this._lsNav === 'grid') {
+                const prev = this._lsPrevText;
+                this._lsPrevText = null;
+                this._lsNav = 'results';
+                this._lsPickRestore = null;
+                this._lsGridNest = [];
+                if (this._lsCrumb)
+                    this._lsCrumb.visible = false;
+                this._entry.text = prev || '';
+                return Clutter.EVENT_STOP;
+            }
             this.close();
             return Clutter.EVENT_STOP;
         }
+
+        /* `ls`: Tab completes the current best folder name into the entry.
+           Enter is handled below (grid item open / result activation). */
+        if (this._ghost && symbol === Clutter.KEY_Tab) {
+            this._commitGhost();
+            return Clutter.EVENT_STOP;
+        }
+
+        /* `ls` same-name picker navigation. */
+        if (this._lsPick) {
+            const n = this._lsPickRows.filter(r => r.box.visible).length;
+            if (n > 0) {
+                if (symbol === Clutter.KEY_Return ||
+                    symbol === Clutter.KEY_KP_Enter ||
+                    symbol === Clutter.KEY_ISO_Enter) {
+                    this._openLsPickRow(this._lsPickSel);
+                    return Clutter.EVENT_STOP;
+                }
+                if (symbol === Clutter.KEY_Down ||
+                    symbol === Clutter.KEY_Page_Down) {
+                    this._lsPickSel = (this._lsPickSel + 1) % n;
+                    this._lsPickHighlight();
+                    return Clutter.EVENT_STOP;
+                }
+                if (symbol === Clutter.KEY_Up ||
+                    symbol === Clutter.KEY_Page_Up) {
+                    this._lsPickSel =
+                        (this._lsPickSel - 1 + n) % n;
+                    this._lsPickHighlight();
+                    return Clutter.EVENT_STOP;
+                }
+            }
+        }
+
+        /* `ls` grid navigation. */
+        if (this._gridActive && this._gridData &&
+            this._gridData.items.length > 0) {
+            const items = this._gridData.items;
+            const cols = Math.max(2, this._gridCols());
+            if (symbol === Clutter.KEY_Return ||
+                symbol === Clutter.KEY_KP_Enter ||
+                symbol === Clutter.KEY_ISO_Enter) {
+                this._gridActivate(this._gridSel);
+                return Clutter.EVENT_STOP;
+            }
+            let moved = false;
+            let sel = this._gridSel;
+            if (symbol === Clutter.KEY_Right) {
+                sel = (sel + 1) % items.length;
+                moved = true;
+            } else if (symbol === Clutter.KEY_Left) {
+                sel = (sel - 1 + items.length) % items.length;
+                moved = true;
+            } else if (symbol === Clutter.KEY_Down ||
+                symbol === Clutter.KEY_Page_Down) {
+                sel = Math.min(items.length - 1, sel + cols);
+                moved = true;
+            } else if (symbol === Clutter.KEY_Up || symbol === Clutter.KEY_Page_Up) {
+                sel = Math.max(0, sel - cols);
+                moved = true;
+            } else if (symbol === Clutter.KEY_Home) {
+                sel = 0;
+                moved = true;
+            } else if (symbol === Clutter.KEY_End) {
+                sel = items.length - 1;
+                moved = true;
+            }
+            if (moved) {
+                this._gridSel = sel;
+                this._gridHighlight();
+                return Clutter.EVENT_STOP;
+            }
+        }
+
         if (symbol === Clutter.KEY_Up || symbol === Clutter.KEY_Down ||
             symbol === Clutter.KEY_Page_Up || symbol === Clutter.KEY_Page_Down) {
             const delta = (symbol === Clutter.KEY_Down ||
@@ -1551,6 +1717,17 @@ export default class SpotlightSearchExtension extends Extension {
                 return this._activate(this._selected);
         }
         return Clutter.EVENT_PROPAGATE;
+    }
+
+    /* Commit the pending `ls` completion (Tab): fill in the full folder name
+       and let the usual text-changed flow re-query the grid. */
+    _commitGhost() {
+        const g = this._ghost;
+        if (!g)
+            return;
+        this._entry.text = `${g.pre || ''}ls ${g.full}`;
+        this._entry.clutter_text.set_cursor_position(
+            `${g.pre || ''}ls ${g.full}`.length);
     }
 
     /* ----- querying -------------------------------------------------------- */
@@ -1629,10 +1806,12 @@ export default class SpotlightSearchExtension extends Extension {
     }
 
     /* Italicize the entry when it is a HotWord or an `ls <folder>` command.
-       HotWords match only when text == the token, so the whole entry gets
-       italicized; an `ls` prefix gets only the "ls" word italicized. St's
-       theme pushes the entry color via Pango attributes, so any replacement
-       list must carry the theme color too — otherwise the text turns black. */
+       HotWords match only when text == the token, so the whole entry is
+       italicized via Pango attributes. In ls mode a bounded italic attribute
+       (start/end set directly on the PangoAttribute, byte-indexed, end
+       exclusive) targets only the "ls" word. The completion candidate is
+       shown as a faint silhouette LABEL laid out beside the entry — never
+       baked into the buffer — so the typed text is never rewritten. */
     _applyHotWordStyle() {
         if (this._markupLock)
             return;
@@ -1641,37 +1820,322 @@ export default class SpotlightSearchExtension extends Extension {
         const text = this._entry.text;
         const hot = this._matchHotWord(text);
         const lsM = /^( *)(ls)([ \t]|$)/i.exec(text);
-        let mode = null;
-        let start = 0;
-        let end = -1;
-        if (hot) {
-            mode = 'hot';
-        } else if (lsM) {
-            mode = 'ls';
-            start = lsM[1].length;
-            end = start + 2;
-        }
         try {
-            if (mode && this._hotWordMarkup !== mode) {
+            if (hot && this._hotWordMarkup !== 'hot') {
                 const c = this._themeEntryColor();
                 const attrs = new Pango.AttrList();
-                attrs.insert(Pango.attr_style_new(Pango.Style.ITALIC, start, end));
+                attrs.insert(Pango.attr_style_new(Pango.Style.ITALIC, 0, -1));
                 if (c) {
                     attrs.insert(Pango.attr_foreground_new(
                         c.red * 257, c.green * 257, c.blue * 257));
                 }
                 this._entry.clutter_text.set_attributes(attrs);
-                this._hotWordMarkup = mode;
-                spotLog(`hotword: ${mode === 'hot' ? 'brand' : 'ls'}-italic «${text}»`);
-            } else if (!mode && this._hotWordMarkup) {
-                this._entry.clutter_text.set_attributes(this._colorList());
-                this._hotWordMarkup = false;
+                this._hotWordMarkup = 'hot';
+                this._ghost = null;
+                this._lsUser = null;
+            } else if (lsM) {
+                const pre = lsM[1];
+                const fragStart = pre.length + 3;
+                const ct = this._entry.clutter_text;
+                let caret = ct.cursor_position;
+                if (typeof caret !== 'number' || caret < fragStart)
+                    caret = text.length;
+                let frag = text.slice(fragStart);
+                if (caret <= text.length)
+                    frag = text.slice(fragStart, caret);
+                let cand = null;
+                if (frag && frag.length > 0 && frag === frag.trim() &&
+                    !frag.includes('\\'))
+                    cand = this._lsComplete(frag);
+                this._lsUser = frag || '';
+                /* Tab-completion candidate only — the entry buffer is NEVER
+                   rewritten while typing, so the text (and caret) stay exactly
+                   as the user typed them. */
+                this._ghost = cand
+                    ? {pre, frag, full: frag + cand.tail, tail: cand.tail}
+                    : null;
+                const c = this._themeEntryColor();
+                const attrs = new Pango.AttrList();
+                /* Italicize only the "ls" word: build the attribute then set
+                   its byte range explicitly (some bindings ignore the range
+                   args passed to attr_style_new and default to whole text). */
+                try {
+                    const st = Pango.attr_style_new(Pango.Style.ITALIC);
+                    st.start_index = pre.length;
+                    st.end_index = pre.length + 2;
+                    attrs.insert(st);
+                } catch (e2) {
+                    try {
+                        attrs.insert(Pango.attr_style_new(
+                            Pango.Style.ITALIC, pre.length, pre.length + 2));
+                    } catch (e3) {
+                        /* leave unitalicized */
+                    }
+                }
+                if (c) {
+                    attrs.insert(Pango.attr_foreground_new(
+                        c.red * 257, c.green * 257, c.blue * 257));
+                }
+                this._markupLock = true;
+                try {
+                    ct.set_attributes(attrs);
+                } finally {
+                    this._markupLock = false;
+                }
+                this._updateLsGhost(cand, caret);
+                this._hotWordMarkup = 'ls';
+            } else {
+                if (this._hotWordMarkup) {
+                    this._entry.clutter_text.set_attributes(this._colorList());
+                    this._hotWordMarkup = null;
+                }
+                this._ghost = null;
+                this._lsUser = null;
+                this._updateLsGhost(null);
             }
         } catch (e) {
-            spotLog(`hotword style: ERROR ${e}`);
-            this._entry.clutter_text.set_attributes(this._colorList());
-            this._hotWordMarkup = false;
+            const ct = this._entry.clutter_text;
+            try {
+                ct.set_text(text);
+            } catch (e2) {
+                /* ignore */
+            }
+            try {
+                ct.set_attributes(this._colorList());
+            } catch (e2) {
+                /* ignore */
+            }
+            this._hotWordMarkup = null;
+            this._ghost = null;
+            this._lsUser = null;
+            this._updateLsGhost(null);
         }
+    }
+
+    /* Show the completion silhouette as a faint label FLOATING OVER the
+       entry, parked exactly at the caret. The caret offset comes from the
+       text actor's cursor geometry first, then a same-font measuring label,
+       then the Pango layout (with a self-calibrated scale correction) —
+       mapped from the actor's absolute position to overlay coordinates. */
+    _updateLsGhost(cand, caret) {
+        if (!this._lsGhost || !this._entry || !this._entry.clutter_text)
+            return;
+        const ct = this._entry.clutter_text;
+        if (!cand || !cand.tail) {
+            this._lsGhost.visible = false;
+            return;
+        }
+        let tail = cand.tail;
+        if (tail.length > 18)
+            tail = tail.slice(0, 18) + '…';
+        this._lsGhost.text = tail;
+        try {
+            let pos = (typeof caret === 'number' && caret >= 0) ?
+                caret : (ct.text || '').length;
+            const max = (ct.text || '').length;
+            if (pos > max)
+                pos = max;
+            const [ovX, ovY] = this._overlay.get_transformed_position();
+            const [ttX, ttY] = ct.get_transformed_position();
+            let pangoSourced = false;
+            let x = null;
+            let y = 0;
+            /* Source 1: the text actor's own cursor geometry. Normalize every
+               shape GJS may return (Clutter.Rect, [bool, rect], [x, y], …). */
+            try {
+                let r = null;
+                if (typeof ct.position_to_coords === 'function') {
+                    /* position_to_coords is the most direct caret API. */
+                    r = ct.position_to_coords(pos);
+                    if (Array.isArray(r)) {
+                        if (typeof r[0] === 'number' &&
+                            typeof r[1] === 'number') {
+                            x = r[0];
+                            y = r[1];
+                            r = null;
+                        } else
+                            r = null;
+                    }
+                }
+                if (x === null && r === null &&
+                    typeof ct.get_cursor_rect === 'function')
+                    r = ct.get_cursor_rect(pos);
+                if (Array.isArray(r)) {
+                    const last = r[r.length - 1];
+                    if (last && typeof last === 'object' &&
+                        typeof last.x === 'number')
+                        r = last;
+                    else if (typeof r[0] === 'number' &&
+                        typeof r[1] === 'number') {
+                        x = r[0];
+                        y = r[1];
+                        r = null;
+                    } else
+                        r = null;
+                }
+                if (r && typeof r.x === 'number' && isFinite(r.x) &&
+                    typeof r.y === 'number') {
+                    x = r.x;
+                    y = r.y;
+                }
+            } catch (e) {
+                /* fall through to the next source */
+            }
+            /* Source 2: VISUAL PROBE — a hidden label with the same 24px
+               style measures the exact on-screen ink width of the typed text
+               (what the user actually sees, from the same rendering path the
+               entry uses), plus the entry's real text inset. No Pango units,
+               no padding guessing. */
+            if (x === null && this._ghostProbe) {
+                try {
+                    this._ghostProbe.text = ct.text || '';
+                    const [mn, nat] = this._ghostProbe.get_preferred_width(-1);
+                    const w = (nat && nat > 0) ? nat : mn;
+                    if (w > 0) {
+                        let insL = 0;
+                        try {
+                            const eb = this._entry.get_allocation_box();
+                            const tb = ct.get_allocation_box();
+                            if (eb && tb && eb.x2 > eb.x1)
+                                insL = Math.max(0, tb.x1 - eb.x1);
+                        } catch (e) {
+                            /* keep 0 */
+                        }
+                        x = insL + w;
+                        y = 0;
+                    }
+                } catch (e) {
+                    /* fall through to the next source */
+                }
+            }
+            /* Source 3: caret at end of text — the whole layout's own pixel
+               width IS the fragment width. No scale math, exact fidelity. */
+            if (x === null && pos >= max &&
+                typeof ct.get_layout === 'function') {
+                const layout = ct.get_layout();
+                if (layout && typeof layout.get_pixel_size === 'function') {
+                    const [tw] = layout.get_pixel_size();
+                    if (typeof tw === 'number' && isFinite(tw) && tw > 0) {
+                        x = tw;
+                        pangoSourced = true;
+                    }
+                }
+            }
+            /* Source 4: Pango index→position. Values may come back in Pango
+               units (1/1024 px); treat anything beyond pixel ranges as units. */
+            if (x === null && typeof ct.get_layout === 'function') {
+                try {
+                    const layout = ct.get_layout();
+                    const rr = layout && layout.index_to_pos ?
+                        layout.index_to_pos(pos) : null;
+                    let ix = rr && typeof rr.x === 'number' ? rr.x : NaN;
+                    if (rr && typeof rr.x === 'number' &&
+                        typeof rr.y === 'number') {
+                        y = typeof rr.y === 'number' ? rr.y : 0;
+                    }
+                    if (isFinite(ix)) {
+                        const scale = (typeof Pango !== 'undefined' &&
+                            Pango.SCALE) ? Pango.SCALE : 1024;
+                        if (Math.abs(ix) > 10000)
+                            ix = ix / scale;
+                        x = ix;
+                        pangoSourced = true;
+                    }
+                } catch (e3) {
+                    /* ignore */
+                }
+            }
+            if (x === null)
+                throw new Error('no caret x');
+            /* Pango scale correction: on shells where the layout's pixel width
+               overshoots the painted text, calibrate from the ghost label
+               itself — its layout width vs its allocated width gives the true
+               Pango→screen factor for this exact font. Applies only to
+               Pango-derived measurements, and only when both numbers are
+               sane, so a bad read can never make things worse. */
+            try {
+                const gct = this._lsGhost.clutter_text;
+                const gl = gct && typeof gct.get_layout === 'function' ?
+                    gct.get_layout() : null;
+                if (pangoSourced &&
+                    gl && typeof gl.get_pixel_size === 'function' &&
+                    typeof this._lsGhost.get_width === 'function') {
+                    const [glw] = gl.get_pixel_size();
+                    const gw = this._lsGhost.get_width();
+                    if (typeof glw === 'number' && isFinite(glw) &&
+                        typeof gw === 'number' && isFinite(gw) &&
+                        glw > 10 && gw > 10) {
+                        const f = glw / gw;
+                        if (f > 1.2 && f < 4)
+                            x = x / f;
+                    }
+                }
+            } catch (e) {
+                /* ignore */
+            }
+            const gx = ttX - ovX + x;
+            const gy = ttY - ovY + y;
+            this._lsGhost.set_position(gx, gy);
+            this._lsGhost.visible = true;
+            this._scheduleGhostRefine(cand, ttX, ttY, ovX, ovY);
+            return;
+        } catch (e) {
+            /* ignore */
+        }
+        try {
+            /* Last resort: keep the ghost inside the panel near the end of
+               the typed text — NOT off at the entry's right edge. */
+            const [ovX, ovY] = this._overlay.get_transformed_position();
+            const [etX, etY] = this._entry.get_transformed_position();
+            const pW = this._panel && this._panel.get_width ?
+                this._panel.get_width() : 640;
+            const gx = Math.max(20, Math.min(etX - ovX + 160, pW - 160));
+            const gy = etY - ovY + 4;
+            this._lsGhost.set_position(gx, gy);
+            this._lsGhost.visible = true;
+        } catch (e2) {
+            this._lsGhost.visible = false;
+        }
+    }
+
+    /* One frame later, when the probe label has actually been laid out and
+       allocated, read its real pixel width (= the on-screen text width the
+       user sees) and correct the ghost so it touches the caret exactly. */
+    _scheduleGhostRefine(cand, ttX, ttY, ovX, ovY) {
+        if (!cand || !this._ghostProbe)
+            return;
+        if (this._refineId) {
+            try {
+                GLib.source_remove(this._refineId);
+            } catch (e) {
+                /* ignore */
+            }
+            this._refineId = 0;
+        }
+        this._refineId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._refineId = 0;
+            try {
+                if (!this._lsGhost || !this._lsGhost.visible ||
+                    !this._entry || !this._entry.clutter_text)
+                    return GLib.SOURCE_REMOVE;
+                const pw = Math.max(2, this._ghostProbe.get_width() || 0);
+                let insL = 0;
+                try {
+                    const eb = this._entry.get_allocation_box();
+                    const tb = this._entry.clutter_text.get_allocation_box();
+                    if (eb && tb && eb.x2 > eb.x1)
+                        insL = Math.max(0, tb.x1 - eb.x1);
+                } catch (e) {
+                    /* keep 0 */
+                }
+                const rgx = ttX - ovX + insL + pw;
+                const rgy = ttY - ovY;
+                this._lsGhost.set_position(rgx, rgy);
+            } catch (e) {
+                /* ignore */
+            }
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _themeEntryColor() {
@@ -1744,17 +2208,14 @@ export default class SpotlightSearchExtension extends Extension {
             const action = this._systemAction(hw.target);
             if (!action) {
                 this._hotWordNotify(`Unknown system action: ${hw.target}`);
-                spotLog(`hotword: unknown system action «${hw.target}»`);
                 return;
             }
             this._hotWordNotify(`Triggering: ${action.label}`);
             try {
                 action.run();
-                spotLog(`hotword: ran system action «${hw.target}»`);
             } catch (e) {
                 this._hotWordNotify(`${action.label} failed: ${e}` +
                     (e.stack ? `\n${e.stack}` : ''));
-                spotLog(`hotword: system action «${hw.target}» ERROR ${e}`);
             }
         }
     }
@@ -1847,7 +2308,6 @@ export default class SpotlightSearchExtension extends Extension {
             }
             proxy.SetBrightnessSilent(level);
         } catch (e) {
-            spotLog(`brightness: ERROR ${e}`);
             this._hotWordNotify('Brightness action failed.');
         }
     }
@@ -2058,7 +2518,7 @@ export default class SpotlightSearchExtension extends Extension {
             St.Clipboard.get_default().set_text(
                 St.ClipboardType.CLIPBOARD, String(text));
         } catch (e) {
-            spotLog(`clipboard: copy ERROR ${e}`);
+            /* ignore */
         }
     }
 
@@ -2069,7 +2529,6 @@ export default class SpotlightSearchExtension extends Extension {
         try {
             raw = bytes.get_data();
         } catch (e) {
-            spotLog(`clip img: read ERROR ${e}`);
             return false;
         }
         if (!raw || !raw.length)
@@ -2099,7 +2558,7 @@ export default class SpotlightSearchExtension extends Extension {
             if (res && res[0])
                 path = filePath;
         } catch (e) {
-            spotLog(`clip img: write ERROR ${e}`);
+            /* ignore */
         }
         const cap = Math.max(1, this._settings.get_int('clipboard-history-size') || 20);
         const arr = this._clipImgs || (this._clipImgs = []);
@@ -2130,7 +2589,7 @@ export default class SpotlightSearchExtension extends Extension {
                     if (res && res[0])
                         o.path = filePath;
                 } catch (e) {
-                    spotLog(`clip img: rewrite ERROR ${e}`);
+                    /* ignore */
                 }
             }
             if (this._setContentClipboard(o, data)) {
@@ -2148,7 +2607,7 @@ export default class SpotlightSearchExtension extends Extension {
                     St.Clipboard.get_default().set_text(
                         St.ClipboardType.CLIPBOARD, o.path);
                 } catch (e) {
-                    spotLog(`clip img: cpath ERROR ${e}`);
+                    /* ignore */
                 }
                 Main.notify('Spotlight',
                     `No clipboard re-copy tool found — path copied: ~/.cache/${base}`);
@@ -2156,7 +2615,7 @@ export default class SpotlightSearchExtension extends Extension {
             }
             Main.notify('Spotlight', 'Clipboard image is no longer available');
         } catch (e) {
-            spotLog(`clip img: copy ERROR ${e}`);
+            /* ignore */
         }
     }
 
@@ -2177,7 +2636,6 @@ export default class SpotlightSearchExtension extends Extension {
                 String(o.mime || 'image/png'), buf);
             return true;
         } catch (e) {
-            spotLog(`clip img: st ERROR ${e}`);
             return false;
         }
     }
@@ -2199,7 +2657,6 @@ export default class SpotlightSearchExtension extends Extension {
             proc.wait_check_async(null, () => {});
             return true;
         } catch (e) {
-            spotLog(`clip img: cli ERROR ${e}`);
             return false;
         }
     }
@@ -2216,7 +2673,7 @@ export default class SpotlightSearchExtension extends Extension {
         try {
             St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, '');
         } catch (e) {
-            spotLog(`clip clear: ERROR ${e}`);
+            /* ignore */
         }
     }
 
@@ -2282,69 +2739,524 @@ export default class SpotlightSearchExtension extends Extension {
                         this._suggestCache = {q: renderQ, rows};
                         this._render([...this._lastMatches, ...rows], renderQ);
                     } catch (e) {
-                        spotLog(`suggest: ERROR ${e}`);
+                        /* ignore */
                     }
                 });
         } catch (e) {
-            spotLog(`suggest: setup ERROR ${e}`);
+            /* ignore */
         }
     }
 
     /* ----- `ls <folder>` --------------------------------------------------- */
 
-    /* Build result rows for an `ls` command: resolve the folder by name,
-       then list every item inside it (folders first, then files). */
-    _lsRows(spec) {
-        const rows = [];
+    /* Resolve the folder named after `ls` and return everything inside it
+       for the grid. `found:false` when the folder can't be resolved. */
+    _lsDirItems(spec) {
         const s = String(spec || '').trim();
-        if (!s) {
-            rows.push({
-                rank: 0,
-                group: 'ls',
-                label: 'List a folder’s contents',
-                sublabel: 'Type a folder name after ls, e.g. “ls home” or “ls Documents”',
-                icon: 'folder-open-symbolic',
-            });
-            return rows;
+        if (!s)
+            return {found: false, spec: s, dirPath: null, items: []};
+        if (!s.includes('/') && !s.includes('\\')) {
+            /* A bare name shared by several folders: hand back the picker
+               list instead of silently opening just one of them. A partial
+               fragment counts too — the ghost already resolved it to a full
+               folder name, so “ls release” starts listing the same-name
+               folders as soon as “relea” is typed, not only once the exact
+               spelling is complete (the picker and the ghost agree). */
+            const cand = this._lsComplete(s);
+            const fullName = cand && cand.full ? cand.full : s;
+            const same = this._findFolders(fullName);
+            if (same.length > 1)
+                return {found: true, spec: fullName, dirPath: null, items: null,
+                        multi: same};
+            const dirPath = same.length === 1 ?
+                same[0].path : this._findFolder(s);
+            if (!dirPath)
+                return {found: false, spec: s, dirPath: null, items: []};
+            return {found: true, spec: s, dirPath,
+                    items: this._lsEntries(dirPath)};
         }
         const dirPath = this._findFolder(s);
-        if (!dirPath) {
-            rows.push({
-                rank: 0,
-                group: 'ls',
-                label: `No folder “${s}” found`,
-                sublabel: 'Looked in your home directory and its subfolders',
-                icon: 'edit-find-symbolic',
-            });
-            return rows;
+        if (!dirPath)
+            return {found: false, spec: s, dirPath: null, items: []};
+        return {found: true, spec: s, dirPath, items: this._lsEntries(dirPath)};
+    }
+
+    /* Autocomplete: best folder name in the home directory that starts with
+       the typed fragment (case-insensitive), picking the first in
+       alphabetical order like folder resolution does. */
+    /* Suggest a completion for an `ls` fragment. Works for home-directory
+       children AND for nested folders anywhere in the home tree (via a
+       bounded recursive prefix scan), AND for path-qualified fragments like
+       `work/sr` or `/data/fo` (the directory part resolves exactly like
+       _findFolder, then a folder is matched inside it). Returns {full, tail}
+       so the ghost and Tab commit line up: `full` is what Tab turns the
+       fragment into, `tail` is the bit that still needs typing. */
+    _lsComplete(frag) {
+        const f = String(frag || '');
+        if (!f || f !== f.trim() || f.length > 80 || f.endsWith('/') ||
+            f.includes('\\'))
+            return null;
+        const home = GLib.get_home_dir();
+        const slash = f.lastIndexOf('/');
+        let targetDir = home;
+        let fBase = f;
+        let prefixPath = '';
+        if (slash >= 0) {
+            const dirPart = f.slice(0, slash) || '/';
+            fBase = f.slice(slash + 1);
+            if (!fBase)
+                return null;
+            targetDir = dirPart === '~' ? home : this._findFolder(dirPart);
+            if (!targetDir)
+                return null;
+            prefixPath = dirPart.replace(/\/+$/, '') + '/';
         }
-        const items = this._lsEntries(dirPath);
-        for (let i = 0; i < items.length; i++) {
-            const it = items[i];
-            rows.push({
-                rank: i,
-                group: 'ls',
-                label: it.name,
-                sublabel: it.isDir
-                    ? `Folder · ${dirPath}/${it.name}`
-                    : `File · ${dirPath}/${it.name}`,
-                icon: it.isDir ? 'folder' : fileIconName(it.path),
-                activate: () => {
-                    openUri(it.uri);
-                    this.close();
-                },
+        const q = fBase.toLowerCase();
+        let best = null;
+        for (const c of this._lsEntries(targetDir)) {
+            if (!c.isDir)
+                continue;
+            const name = c.name.toLowerCase();
+            if (name === q)
+                return null; /* exact folder already typed — nothing to suggest */
+            if (name.startsWith(q) &&
+                (!best || c.name.localeCompare(best.folderName) < 0))
+                best = {folderName: c.name, full: prefixPath + c.name};
+        }
+        if (best)
+            return {full: best.full, tail: best.folderName.slice(fBase.length)};
+        /* Unanchored fragment (no slash): also offer a folder found anywhere
+           in the home tree, mirroring how _findFolder can resolve it. But if
+           several folders share the exact name, no single best exists — the
+           picker list takes over, so no ghost. */
+        if (slash < 0) {
+            const same = this._findFolders(q);
+            if (same.length > 1)
+                return null;
+            const hit = this._searchDirPrefix(q, home, 4, 20000);
+            if (hit && hit.name.toLowerCase() !== q)
+                return {full: hit.name, tail: hit.name.slice(f.length)};
+        }
+        return null;
+    }
+
+    /* Number of grid columns from the current panel width, sizing cells so
+       the grid reads cleanly (about 120px per column). */
+    _gridCols() {
+        let width = 640;
+        try {
+            width = this._settings.get_int('panel-width') || 640;
+        } catch (e) {
+            /* keep default */
+        }
+        return Math.max(2, Math.min(8, Math.floor((width - 36) / 120)));
+    }
+
+    /* Exact, equal column width so every cell lines up (this shell's St
+       doesn't support `x_fill`, so equal widths must be set explicitly). */
+    _gridCellWidth(cols) {
+        let width = 640;
+        try {
+            width = this._settings.get_int('panel-width') || 640;
+        } catch (e) {
+            /* keep default */
+        }
+        /* panel side padding (6px each) + grid padding (8px each) */
+        const usable = width - 28;
+        return Math.max(90, Math.floor(usable / cols));
+    }
+
+    _gridCell() {
+        const box = new St.BoxLayout({
+            orientation: Clutter.Orientation.VERTICAL,
+            style: 'padding: 10px 4px; border-radius: 12px;',
+            reactive: true,
+            can_focus: true,
+            visible: false,
+        });
+        const icon = new St.Icon({
+            icon_size: 42,
+            style: 'margin-bottom: 6px;',
+            x_align: Clutter.ActorAlign.CENTER,
+        });
+        const label = new St.Label({
+            text: '',
+            style: 'font-size: 12px; color: rgba(255,255,255,0.9);' +
+                ' text-align: center;',
+            x_expand: true,
+            x_align: Clutter.ActorAlign.CENTER,
+        });
+        label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+        box.add_child(icon);
+        box.add_child(label);
+        return {box, icon, label};
+    }
+
+    _ensureGridCells(count, cols) {
+        const colW = this._gridCellWidth(cols);
+        while (this._gridCells.length < count) {
+            const cell = this._gridCell();
+            const idx = this._gridCells.length;
+            const rowIdx = Math.floor(idx / cols);
+            cell.box.width = colW;
+            cell.box.connect('button-press-event', () => {
+                this._gridActivate(idx);
+                return Clutter.EVENT_STOP;
+            });
+            cell.box.connect('enter-event', () => {
+                this._gridSel = idx;
+                this._gridHighlight();
+                return Clutter.EVENT_PROPAGATE;
+            });
+            this._gridCells.push(cell);
+        }
+        for (const cell of this._gridCells)
+            cell.box.width = colW;
+        const rowsNeeded = Math.ceil(count / cols);
+        while (this._gridRows.length < rowsNeeded) {
+            const row = new St.BoxLayout({
+                orientation: Clutter.Orientation.HORIZONTAL,
+                x_expand: true,
+            });
+            this._lsGrid.add_child(row);
+            this._gridRows.push(row);
+        }
+        for (let i = 0; i < this._gridCells.length; i++) {
+            const cell = this._gridCells[i];
+            const visible = i < count;
+            const target = visible ? this._gridRows[Math.floor(i / cols)] : null;
+            if (target && cell.box.get_parent() !== target)
+                target.add_child(cell.box);
+            cell.box.visible = visible;
+        }
+    }
+
+    _gridHighlight() {
+        for (let i = 0; i < this._gridCells.length; i++) {
+            const cell = this._gridCells[i];
+            if (!cell.box.visible)
+                continue;
+            cell.box.style = (i === this._gridSel)
+                ? 'padding: 10px 4px; border-radius: 12px;' +
+                    'background-color: rgba(74,144,226,0.35);'
+                : 'padding: 10px 4px; border-radius: 12px;';
+        }
+    }
+
+    _gridActivate(idx) {
+        const it = this._gridData && this._gridData.items &&
+            this._gridData.items[idx] ? this._gridData.items[idx] : null;
+        if (!it) {
+            this.close();
+            return;
+        }
+        if (it.isDir) {
+            /* Open the folder inside Spotlight: remember the current level so
+               Esc can walk back one grid at a time)Skip to Esc nest being a
+               plain grid, never a picker payload — the grid→picker hand-off
+               stays on _lsPickRestore, so an empty `multi: []` (which would
+               re-render the picker with nothing) is exactly what must NOT be
+               stored here. That used to make Esc produce a blank grid. */
+            this._lsGridNest.push({
+                spec: this._gridData.spec || '',
+                name: it.name || '',
+                items: this._gridData.items || [],
+            });
+            const data = this._lsDirItems(it.path);
+            if (data.multi) {
+                this._lsNav = 'picker';
+                this._renderLsPick(data);
+                return;
+            }
+            this._lsNav = 'grid';
+            this._renderGrid(data);
+            return;
+        }
+        try {
+            openUri(it.uri);
+        } catch (e) {
+            /* ignore */
+        }
+        this.close();
+    }
+
+    /* --- same-name picker: several folders share the folder name ---------- */
+
+    _lsPickRow() {
+        const box = new St.BoxLayout({
+            style: 'padding: 8px 12px; border-radius: 10px;',
+            reactive: true,
+            can_focus: true,
+            visible: false,
+            x_expand: true,
+        });
+        const icon = new St.Icon({
+            icon_size: 24,
+            style: 'margin-right: 12px;',
+        });
+        const name = new St.Label({
+            text: '',
+            style: 'font-size: 15px; color: rgba(255,255,255,0.92);',
+            x_expand: true,
+            clip_to_allocation: true,
+        });
+        const sub = new St.Label({
+            text: '',
+            style: 'font-size: 11px; color: rgba(255,255,255,0.45);',
+            x_align: Clutter.ActorAlign.END,
+        });
+        box.add_child(icon);
+        box.add_child(name);
+        box.add_child(sub);
+        box.connect('button-press-event', () => {
+            const idx = this._lsPickRows.findIndex(r => r.box === box);
+            if (idx >= 0 && this._lsPick) {
+                this._lsPickSel = idx;
+                this._openLsPickRow(idx);
+            }
+            return Clutter.EVENT_STOP;
+        });
+        box.connect('enter-event', () => {
+            const idx = this._lsPickRows.findIndex(r => r.box === box);
+            if (idx >= 0 && this._lsPick) {
+                this._lsPickSel = idx;
+                this._lsPickHighlight();
+            }
+            return Clutter.EVENT_PROPAGATE;
+        });
+        return {box, icon, name, sub, rowPath: ''};
+    }
+
+    _lsPickData() {
+        return this._gridData && Array.isArray(this._gridData.multi) ?
+            this._gridData.multi : [];
+    }
+
+    _openLsPickRow(idx) {
+        const rows = this._lsPickData();
+        const t = rows[idx];
+        if (!t) {
+            this.close();
+            return;
+        }
+        this._lsPick = false;
+        this._lsPickRestore = {
+            spec: this._gridData ? this._gridData.spec : '',
+            multi: this._lsPickData(),
+        };
+        this._renderGrid(this._lsDirItems(t.path));
+    }
+
+        /* Breadcrumb address bar: a horizontal strip above the grid showing the
+       folders you've walked through, e.g. `ls share > vim > config`. Each
+       crumb is clickable and jumps straight back to that folder the same way
+       Esc steps out one level. Everything is derived from the nest stack so
+       it never needs its own bookkeeping. */
+    _renderLsCrumb() {
+        const show = this._lsNav === 'grid' || this._lsNav === 'picker';
+        if (!show) {
+            if (this._lsCrumb)
+                this._lsCrumb.visible = false;
+            return;
+        }
+        /* Path = root folder spec (from the first grid level) followed by one
+           crumb per opened folder, taken straight from the nest stack. */
+        /* Root folder = the level the grid FIRST opened at (kept whole in
+           nest[0].spec once any subfolder has been opened). The current
+           _gridData.spec is NOT used — _renderGrid overwrites it with the
+           *selected* subfolder's spec, so reading it here would double the
+           last crumb (that's the “ls > A > B > B” duplicate). */
+        const nest = this._lsGridNest || [];
+        let root = nest.length
+            ? (nest[0].spec || '')
+            : ((this._gridData && this._gridData.spec) || '');
+        const path = [];
+        if (root) {
+            const base = String(root).split('/').filter(Boolean).pop() || root;
+            path.push(base);
+        }
+        for (const lvl of nest)
+            path.push(lvl.name || '');
+        if (!path.length)
+            path.push('...');
+        while (this._lsCrumbRows.length < path.length + 2)
+            this._lsCrumbRows.push(this._lsCrumbRow());
+        const rows = this._lsCrumbRows;
+        for (let i = 0; i < rows.length; i++) {
+            const r = rows[i];
+            if (i === 0) {
+                r.label.text = 'ls';
+                r.sep.text = '>';
+                r.box.visible = true;
+                r.jump = -1;
+                continue;
+            }
+            const crumbIdx = i - 1;
+            if (crumbIdx < path.length) {
+                r.label.text = path[crumbIdx];
+                r.sep.text = '>';
+                r.box.visible = true;
+                r.jump = crumbIdx;
+            } else {
+                r.box.visible = false;
+            }
+        }
+        this._lsCrumb.visible = path.length > 1 || true;
+    }
+
+    /* One clickable crumb slot. */
+    _lsCrumbRow() {
+        const box = new St.BoxLayout({
+            orientation: Clutter.Orientation.HORIZONTAL,
+            style: 'padding: 2px 4px;',
+            reactive: true,
+            visible: false,
+        });
+        const label = new St.Label({
+            style: 'font-size: 12px; color: rgba(255,255,255,0.85);',
+        });
+        const sep = new St.Label({
+            text: '>',
+            style: 'font-size: 12px; color: rgba(255,255,255,0.35);' +
+                    'padding: 0 5px;',
+        });
+        box.add_child(label);
+        box.add_child(sep);
+        this._lsCrumb.add_child(box);
+        return { box, label, sep, jump: -1 };
+    }
+
+    /* Wire a crumb click. */
+    _wireLsCrumb(row) {
+        if (row._crumbConn)
+            return;
+        row._crumbConn = row.box.connect('button-press-event', () => {
+            this._lsCrumbJump(row.jump);
+            return Clutter.EVENT_STOP;
+        });
+    }
+
+    /* Jump back to breadcrumb level `depth`: walk out one grid level at a
+       time (same path Esc takes) until the nest holds exactly `depth`
+       entries. `depth 0` returns to the picker result the grid came from. */
+    _lsCrumbJump(depth) {
+        if (this._lsNav !== 'grid')
+            return;
+        const nest = this._lsGridNest || [];
+        while (nest.length > depth) {
+            const back = nest.pop();
+            this._renderGrid({
+                found: true,
+                spec: back.spec,
+                dirPath: null,
+                items: back.items || [],
+                multi: back.multi || undefined,
             });
         }
-        if (items.length === 0) {
-            rows.push({
-                rank: 0,
-                group: 'ls',
-                label: 'Empty folder',
-                sublabel: dirPath,
-                icon: 'folder-open-symbolic',
-            });
+    }
+
+_renderLsPick(data) {
+        this._gridData = data;
+        this._lsNav = 'picker';
+        this._lsPick = true;
+        this._lsPickSel = 0;
+        this._selected = 0;
+        this._hovered = -1;
+        const rows = data.multi || [];
+        while (this._lsPickRows.length < rows.length)
+            this._lsPickRows.push(this._lsPickRow());
+        for (const row of this._gridRows)
+            row.visible = false;
+        for (const cell of this._gridCells)
+            cell.box.visible = false;
+        for (let i = 0; i < this._lsPickRows.length; i++) {
+            const slot = this._lsPickRows[i];
+            if (slot.box.get_parent() !== this._lsGrid)
+                this._lsGrid.add_child(slot.box);
+            if (i >= rows.length) {
+                slot.box.visible = false;
+                continue;
+            }
+            slot.rowPath = rows[i].path;
+            slot.icon.icon_name = 'folder';
+            slot.name.text = rows[i].name;
+            slot.sub.text = this._shortFolderPath(rows[i].path);
+            slot.box.visible = true;
         }
-        return rows;
+        this._lsPickHighlight();
+        this._lsGrid.visible = true;
+        this._gridActive = false;
+        this._footer.text = `${rows.length} folders named “${data.spec}”    ` +
+            '↑↓ Choose    ↵ Open    Esc Close';
+    }
+
+    _lsPickHighlight() {
+        for (let i = 0; i < this._lsPickRows.length; i++) {
+            const slot = this._lsPickRows[i];
+            slot.box.style = 'padding: 8px 12px; border-radius: 10px;' +
+                (i === this._lsPickSel && slot.box.visible
+                    ? 'background-color: rgba(74,144,226,0.30);'
+                    : '');
+        }
+    }
+
+    /* Render the folder's contents as a grid inside the panel. */
+    _renderGrid(data) {
+        if (!this._overlay || !this._overlay.visible) {
+            this._gridData = null;
+            return;
+        }
+        this._clearResults();
+        if (Array.isArray(data.multi)) {
+            this._renderLsPick(data);
+            return;
+        }
+        this._gridData = data;
+        this._lsNav = 'grid';
+        this._selected = 0;
+        this._hovered = -1;
+        if (!data.found) {
+            this._lsMsg.text = String(data.spec || '')
+                ? `No folder “${data.spec}” found — try a folder in your home directory`
+                : 'Type a folder name after ls, e.g. “ls home” or “ls Documents”';
+            this._lsMsg.visible = true;
+            this._lsGrid.visible = false;
+            this._gridActive = false;
+            this._footer.text = '↑↓ Navigate    ↵ Open    Esc Close';
+            return;
+        }
+        if (data.items.length === 0) {
+            this._lsMsg.text = `Empty folder: ${data.dirPath}`;
+            this._lsMsg.visible = true;
+            this._lsGrid.visible = false;
+            this._gridActive = false;
+            this._footer.text = '↑↓ Navigate    ↵ Open    Esc Close';
+            return;
+        }
+        this._lsMsg.visible = false;
+        const cols = this._gridCols();
+        this._gridSel = Math.min(this._gridSel, data.items.length - 1);
+        this._ensureGridCells(data.items.length, cols);
+        for (let i = 0; i < data.items.length; i++) {
+            const it = data.items[i];
+            const cell = this._gridCells[i];
+            cell.icon.icon_name = it.isDir ? 'folder' : fileIconName(it.path);
+            cell.label.text = it.name;
+        }
+        this._setGridRowsVisible(data.items.length, cols);
+        this._gridHighlight();
+        this._lsGrid.visible = true;
+        this._gridActive = true;
+        this._footer.text = `Grid · ${data.items.length} items    ←↑↓→ Navigate    ↵ Open    Tab Complete    Esc Close`;
+    }
+
+    _setGridRowsVisible(count, cols) {
+        const rowsNeeded = Math.ceil(count / cols);
+        for (let i = 0; i < this._gridRows.length; i++)
+            this._gridRows[i].visible = i < rowsNeeded;
+        this._renderLsCrumb();
+        for (const r of this._lsCrumbRows)
+            this._wireLsCrumb(r);
     }
 
     /* Resolve a folder name to a real path: home shorthand, absolute paths,
@@ -2360,7 +3272,8 @@ export default class SpotlightSearchExtension extends Extension {
         const expanded = q.startsWith('~/') ? home + q.slice(1) : q;
         const isDir = path => {
             try {
-                return GLib.file_test(path, GLib.G_FILE_TEST_IS_DIR);
+                const dirFlag = (GLib.FileTest && GLib.FileTest.IS_DIR) || 4;
+                return GLib.file_test(path, dirFlag);
             } catch (e) {
                 return false;
             }
@@ -2370,20 +3283,70 @@ export default class SpotlightSearchExtension extends Extension {
         const direct = `${home}/${q}`;
         if (isDir(direct))
             return direct;
-        for (const c of this._lsEntries(home)) {
+        const homeKids = this._lsEntries(home);
+        for (const c of homeKids) {
             if (c.isDir && c.name.toLowerCase() === q.toLowerCase())
                 return c.path;
         }
-        return this._searchDirName(q, home, 3, 2000);
+        /* Partial names resolve like autocomplete does: the
+           alphabetically-first home child starting with the fragment
+           (case-insensitive), so `ls h…` already shows that folder. */
+        const ql = q.toLowerCase();
+        if (ql && !ql.includes('/') && !ql.includes('\\')) {
+            let best = null;
+            for (const c of homeKids) {
+                if (!c.isDir)
+                    continue;
+                if (c.name.toLowerCase().startsWith(ql) &&
+                    (!best || c.name.localeCompare(best.name) < 0))
+                    best = c;
+            }
+            if (best)
+                return best.path;
+        }
+        const exact = this._searchDirName(q, home, 4, 20000);
+        if (exact)
+            return exact;
+        /* A partial fragment with no home-child match can still exist deeper
+           in the tree — resolve it the same way the ghost suggests it, so
+           Enter and Tab agree. */
+        const hit = this._searchDirPrefix(q, home, 4, 20000);
+        return hit ? hit.path : null;
     }
 
-    /* Enumerate a directory, skipping hidden entries, folders first. */
+    /* Enumerate a directory, skipping hidden entries, folders first.
+       Listings are cached per path and re-validated by the directory's
+       modification time, so keystroke storms and grid/ghost both reuse one
+       enumeration instead of re-scanning the disk. The cache is only used
+       when the real Gio query_info API is available; the test harness stub
+       lacks it, so tests always enumerate the virtual FS live. */
     _lsEntries(path) {
+        const file = Gio.File.new_for_path(path);
+        let cached = this._lsCache ? this._lsCache.get(path) : null;
+        if (!cached) {
+            /* First touch: probe for the real mtime API (once) and, on a
+               live shell, create the cache map. */
+            if (!this._lsCache && typeof file.query_info === 'function')
+                this._lsCache = new Map();
+            cached = null;
+        }
+        if (cached && typeof file.query_info === 'function') {
+            try {
+                const info = file.query_info('time::mtime',
+                    Gio.FileQueryInfoFlags.NONE, null);
+                if (info && info.get_modification_date_time &&
+                    info.get_modification_date_time().to_unix() === cached.mtime)
+                    return cached.list;
+                this._lsCache.delete(path);
+            } catch (e) {
+                /* unreadable now — drop the stale copy and re-enumerate */
+                this._lsCache.delete(path);
+            }
+        }
         const out = [];
         try {
-            const it = Gio.File.new_for_path(path)
-                .enumerate_children('standard::type,standard::name',
-                    Gio.FileQueryInfoFlags.NONE, null);
+            const it = file.enumerate_children('standard::type,standard::name',
+                Gio.FileQueryInfoFlags.NONE, null);
             let info;
             while ((info = it.next_file(null))) {
                 try {
@@ -2402,8 +3365,26 @@ export default class SpotlightSearchExtension extends Extension {
                 }
             }
             it.close(null);
+            if (this._lsCache && typeof file.query_info === 'function') {
+                try {
+                    const di = file.query_info('time::mtime',
+                        Gio.FileQueryInfoFlags.NONE, null);
+                    const mtime = di && di.get_modification_date_time ?
+                        di.get_modification_date_time().to_unix() : 0;
+                    if (mtime > 0) {
+                        /* Bound the cache so pathological browsing can't
+                           grow it indefinitely. */
+                        if (this._lsCache.size >= 64)
+                            this._lsCache.delete(
+                                this._lsCache.keys().next().value);
+                        this._lsCache.set(path, {mtime, list: out});
+                    }
+                } catch (e) {
+                    /* caching is best-effort */
+                }
+            }
         } catch (e) {
-            spotLog(`ls: enumerate ${path} ERROR ${e}`);
+            /* ignore */
         }
         out.sort((a, b) => (Number(b.isDir) - Number(a.isDir)) ||
             a.name.localeCompare(b.name));
@@ -2434,6 +3415,68 @@ export default class SpotlightSearchExtension extends Extension {
                 return hit;
         }
         return null;
+    }
+
+    /* Bounded recursive scan for the alphabetically-first FOLDER whose name
+       starts with the fragment (case-insensitive) — the search analogue of
+       the `ls` autocomplete, so ghost suggestions work for nested folders
+       too. Returns {path, name} or null. */
+    _searchDirPrefix(q, dirPath, depth, budget) {
+        const entries = this._lsEntries(dirPath);
+        for (const c of entries) {
+            budget--;
+            if (budget <= 0)
+                return null;
+            if (c.isDir && c.name.toLowerCase().startsWith(q))
+                return {path: c.path, name: c.name};
+        }
+        if (depth <= 0)
+            return null;
+        for (const c of entries) {
+            budget--;
+            if (budget <= 0)
+                return null;
+            if (!c.isDir)
+                continue;
+            const hit = this._searchDirPrefix(q, c.path, depth - 1, budget);
+            if (hit)
+                return hit;
+        }
+        return null;
+    }
+
+    /* Display path for the same-name picker rows: the last 3 path segments
+       (the folder plus the two above it), never the full path. */
+    _shortFolderPath(path) {
+        const parts = String(path || '').replace(/\/+$/, '').split('/')
+            .filter(Boolean);
+        return parts.slice(-3).join('/');
+    }
+
+    /* Every folder in the home tree whose exact name equals the fragment
+       (case-insensitive), sorted by path. When more than one matches, the
+       `ls` surface shows a picker list so the user chooses which one. */
+    _findFolders(name) {
+        const q = String(name || '').toLowerCase();
+        if (!q)
+            return [];
+        const out = [];
+        let budget = 20000;
+        const walk = (dirPath, depth) => {
+            if (depth < 0 || budget <= 0 || out.length >= 100)
+                return;
+            for (const c of this._lsEntries(dirPath)) {
+                if (budget-- <= 0 || out.length >= 100)
+                    return;
+                if (!c.isDir)
+                    continue;
+                if (c.name.toLowerCase() === q)
+                    out.push({name: c.name, path: c.path});
+                walk(c.path, depth - 1);
+            }
+        };
+        walk(GLib.get_home_dir(), 4);
+        return out.sort((a, b) => a.path.localeCompare(b.path));
     }
 
     _installedApps() {
@@ -2467,7 +3510,6 @@ export default class SpotlightSearchExtension extends Extension {
         this._clearResults();
 
         const q = this._query();
-        spotLog(`refresh(): q=«${q}»`);
 
         /* Web-route auto-detection: as soon as the entry looks like a token
            (e.g. "-yt"), mirror that route's icon in the entry, and if the
@@ -2505,11 +3547,28 @@ export default class SpotlightSearchExtension extends Extension {
             return;
         }
 
-        /* `ls <folder>`: list a folder's contents in place of search results
-           and web suggestions. */
-        const lsSpec = text.match(/^ls(?:[ \t]+(.+))?$/i);
+        /* `ls <folder>`: show the folder's contents as a grid in place of search
+           results and web suggestions. The entry's autocomplete ghost is
+           stripped here so only the user-typed fragment is resolved. */
+        const lsText = this._lsUser ? `ls ${this._lsUser}` : ptext;
+        const lsSpec = lsText.match(/^ls(?:[ \t]+(.+))?$/i);
         if (lsSpec) {
-            this._render(this._lsRows(lsSpec[1]), q);
+            try {
+                this._renderGrid(this._lsDirItems(lsSpec[1]));
+            } catch (e) {
+                /* Never fail silently: a render crash used to leave the panel
+                   blank with no message at all. */
+                try {
+                    this._gridData = null;
+                    this._gridActive = false;
+                    this._lsGrid.visible = false;
+                    this._lsMsg.text = `Couldn’t list “${lsSpec[1] || ''}”: ${e}`;
+                    this._lsMsg.visible = true;
+                    this._footer.text = '↑↓ Navigate    ↵ Open    Esc Close';
+                } catch (e2) {
+                    /* ignore */
+                }
+            }
             return;
         }
 
@@ -2681,7 +3740,7 @@ export default class SpotlightSearchExtension extends Extension {
                 });
                 scheduleRender();
             } catch (e) {
-                spotLog(`refresh(): file-match ERROR ${e}`);
+                /* ignore */
             }
         }, (count) => {
             if (fileRenderId) {
@@ -2696,7 +3755,7 @@ export default class SpotlightSearchExtension extends Extension {
         this._render(foldSugs(), q);
         this._webSuggest(q);
         } catch (e) {
-            spotLog(`refresh(): ERROR ${e}`);
+            /* ignore */
         }
     }
 
@@ -2732,7 +3791,6 @@ export default class SpotlightSearchExtension extends Extension {
 
     _openApp(app) {
         const id = app.get_id();
-        spotLog(`openApp: ${id}`);
         /* close() pops the modal grab synchronously, so we can launch in the
            same tick — no extra mainloop round-trip on the hot path. */
         this.close();
@@ -2753,7 +3811,7 @@ export default class SpotlightSearchExtension extends Extension {
                 fn();
                 done = true;
             } catch (e) {
-                spotLog(`openApp: ${name}(${id}) ERROR ${e}`);
+                /* ignore */
             }
         }
         if (!done && app.app_info) {
@@ -2761,11 +3819,11 @@ export default class SpotlightSearchExtension extends Extension {
                 app.app_info.launch([], null);
                 done = true;
             } catch (e) {
-                spotLog(`openApp: app_info.launch(${id}) ERROR ${e}`);
+                /* ignore */
             }
         }
         if (!done && id.endsWith('.desktop'))
-            spotLog(`openApp: desktop-launch(${id}) => ${launchByDesktopId(id)}`);
+            launchByDesktopId(id);
     }
 
     _appIcon(app, size) {
@@ -2776,7 +3834,7 @@ export default class SpotlightSearchExtension extends Extension {
         try {
             gicon = app.get_icon();
         } catch (e) {
-            spotLog(`_appIcon(): get_icon ERROR ${e}`);
+            /* ignore */
         }
         if (!gicon)
             gicon = new Gio.ThemedIcon({name: 'application-x-executable'});
@@ -2797,6 +3855,19 @@ export default class SpotlightSearchExtension extends Extension {
         this._resultRows = [];
         this._selected = 0;
         this._hovered = -1;
+        this._lsPick = false;
+        if (this._lsGrid) {
+            this._lsGrid.visible = false;
+            this._lsMsg.visible = false;
+            this._gridActive = false;
+            if (this._lsPickRows)
+                for (const r of this._lsPickRows)
+                    r.box.visible = false;
+            for (const row of this._gridRows)
+                row.visible = false;
+            for (const cell of this._gridCells)
+                cell.box.visible = false;
+        }
         if (!this._pool)
             return;
         for (const slot of this._pool) {
@@ -2915,9 +3986,8 @@ export default class SpotlightSearchExtension extends Extension {
                 ? `Tab to complete “${suggestion}”    ↑↓ Navigate    ↵ Open    Esc Close`
                 : '↑↓ Navigate    ↵ Open    Esc Close';
 
-            spotLog(`render(): rows=${shown.length} q=«${q}»${shown.length === 0 ? ' <-- EMPTY' : ''}`);
         } catch (e) {
-            spotLog(`render(): ERROR ${e}`);
+            /* ignore */
         }
     }
 
@@ -3019,7 +4089,6 @@ export default class SpotlightSearchExtension extends Extension {
                 thumb.gicon = Gio.FileIcon.new_for_path(row.image);
                 thumb.visible = true;
             } catch (e) {
-                spotLog(`thumb: ERROR ${e}`);
                 thumb.gicon = null;
                 thumb.visible = false;
             }
@@ -3042,16 +4111,14 @@ export default class SpotlightSearchExtension extends Extension {
 
     _activate(index) {
         if (index < 0 || index >= this._resultRows.length) {
-            spotLog(`activate(): OOB index=${index} len=${this._resultRows.length}`);
             return Clutter.EVENT_PROPAGATE;
         }
         const {row} = this._resultRows[index];
         if (row.activate) {
-            spotLog(`activate(): index=${index} label=«${row.label}»`);
             try {
                 row.activate();
             } catch (e) {
-                spotLog(`activate(): row ERROR ${e}`);
+                /* ignore */
             }
             return Clutter.EVENT_STOP;
         }
