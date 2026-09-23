@@ -693,6 +693,9 @@ class FileSearch {
         this._maxEntries = maxEntries;
         this._maxMatches = Math.min(maxMatches, 45);
         this._proc = null;
+        /* Last fully-completed scan, for prefix-narrowing reuse. */
+        this._lastFull = null;
+        this._servingCache = false;
     }
 
     cancel() {
@@ -704,17 +707,14 @@ class FileSearch {
             }
             this._proc = null;
         }
+        this._servingCache = false;
     }
 
     get cancelled() {
-        return this._proc === null;
+        return this._proc === null && !this._servingCache;
     }
 
-    search(query, onMatch, onDone) {
-        this.cancel();
-        if (!query || query.length < 2)
-            return;
-
+    _searchRoots() {
         const home = GLib.get_home_dir();
         const user = GLib.get_user_name();
         const routes = [home, '/media/' + user, '/mnt'];
@@ -723,6 +723,59 @@ class FileSearch {
             if (!roots.some(x => x === r) && GLib.file_test(r, GLib.FileTest.IS_DIR))
                 roots.push(r);
         }
+        return roots;
+    }
+
+    search(query, onMatch, onDone) {
+        this.cancel();
+        if (!query || query.length < 2)
+            return;
+        const ql = String(query).toLowerCase();
+
+        /* Narrowing reuse: typing "doc"→"docs" needs no new `find`
+           when the previous scan finished completely — every name
+           matching *docs* also matched *doc* (same roots, depth and
+           prunes), so filtering the finished set in memory returns
+           exactly what a fresh scan would. Skips a ~250ms spawn. */
+        const prev = this._lastFull;
+        if (prev && prev.paths && ql.startsWith(prev.q)) {
+            const roots = this._searchRoots();
+            if (roots.length && roots.length === prev.roots.length &&
+                roots.every((r, i) => r === prev.roots[i])) {
+                const fresh = [];
+                this._servingCache = true;
+                try {
+                    for (const p of prev.paths) {
+                        const base = p.slice(p.lastIndexOf('/') + 1)
+                            .toLowerCase();
+                        if (!base.includes(ql))
+                            continue;
+                        fresh.push(p);
+                        try {
+                            onMatch(p.startsWith('/') ?
+                                Gio.File.new_for_path(p) :
+                                Gio.File.new_for_uri(p));
+                        } catch (e) {
+                            /* ignore */
+                        }
+                    }
+                } finally {
+                    this._servingCache = false;
+                }
+                /* Chain the window: continued typing keeps narrowing
+                   in memory without ever spawning again. */
+                this._lastFull = {q: ql, paths: fresh, roots};
+                try {
+                    if (onDone)
+                        onDone(fresh.length);
+                } catch (e) {
+                    /* ignore */
+                }
+                return;
+            }
+        }
+
+        const roots = this._searchRoots();
         if (!roots.length)
             return;
 
@@ -757,6 +810,7 @@ class FileSearch {
         });
 
         let count = 0;
+        const seen = [];
         const readNext = () => {
             stream.read_line_async(GLib.PRIORITY_DEFAULT, null, (s, res) => {
                 if (this._proc !== proc)
@@ -768,6 +822,10 @@ class FileSearch {
                     return;
                 }
                 if (line === null) {
+                    /* Fully enumerated within the cap: remember the set
+                       so a longer query can narrow it in memory. */
+                    if (count <= this._maxMatches)
+                        this._lastFull = {q: ql, paths: seen, roots};
                     try {
                         if (onDone)
                             onDone(count);
@@ -785,7 +843,14 @@ class FileSearch {
                     return;
                 }
                 try {
-                    onMatch(Gio.File.new_for_path(path));
+                    const f = Gio.File.new_for_path(path);
+                    try {
+                        const fp = f.get_path();
+                        seen.push(fp || path);
+                    } catch (e) {
+                        seen.push(path);
+                    }
+                    onMatch(f);
                 } catch (e) {
                     /* ignore */
                 }
@@ -831,6 +896,8 @@ export default class SpotlightSearchExtension extends Extension {
             this._freqCache = new Map();
             this._lastRenderSig = '';
             this._lastRenderQ = null;
+            this._lastShownCount = 0;
+            this._watchdogArmed = false;
             this._routesCache = null;
             this._routesCacheAt = 0;
             this._freqFn = null;
@@ -983,6 +1050,8 @@ export default class SpotlightSearchExtension extends Extension {
             this._suggestion = null;
             this._lastRenderSig = '';
             this._lastRenderQ = null;
+            this._lastShownCount = 0;
+            this._watchdogArmed = false;
             this._installedApps();
             this._modalId = Main.pushModal(this._overlay,
                 {actionMode: Shell.ActionMode.SYSTEM_MODAL});
@@ -3440,9 +3509,13 @@ _renderLsPick(data) {
                 if (info && info.get_modification_date_time &&
                     info.get_modification_date_time().to_unix() === cached.mtime)
                     return cached.list;
+                /* Proven mutation (mtime moved): the scan memo must not
+                   serve anything computed before this. */
+                this._lsEnumGen = (this._lsEnumGen || 0) + 1;
                 this._lsCache.delete(path);
             } catch (e) {
                 /* unreadable now — drop the stale copy and re-enumerate */
+                this._lsEnumGen = (this._lsEnumGen || 0) + 1;
                 this._lsCache.delete(path);
             }
         }
@@ -3497,6 +3570,14 @@ _renderLsPick(data) {
     /* Bounded recursive scan for a directory whose name matches (depth+node
        budget) so `ls <folder>` stays instant on big trees. */
     _searchDirName(q, dirPath, depth, budget) {
+        if (depth === 4 && budget === 20000) {
+            return this._scanMemo(`N:${q}|${dirPath}`, () =>
+                this._searchDirNameWalk(q, dirPath, depth, budget));
+        }
+        return this._searchDirNameWalk(q, dirPath, depth, budget);
+    }
+
+    _searchDirNameWalk(q, dirPath, depth, budget) {
         const entries = this._lsEntries(dirPath);
         for (const c of entries) {
             budget--;
@@ -3513,7 +3594,7 @@ _renderLsPick(data) {
                 return null;
             if (!c.isDir)
                 continue;
-            const hit = this._searchDirName(q, c.path, depth - 1, budget);
+            const hit = this._searchDirNameWalk(q, c.path, depth - 1, budget);
             if (hit)
                 return hit;
         }
@@ -3525,6 +3606,14 @@ _renderLsPick(data) {
        the `ls` autocomplete, so ghost suggestions work for nested folders
        too. Returns {path, name} or null. */
     _searchDirPrefix(q, dirPath, depth, budget) {
+        if (depth === 4 && budget === 20000) {
+            return this._scanMemo(`P:${q}|${dirPath}`, () =>
+                this._searchDirPrefixWalk(q, dirPath, depth, budget));
+        }
+        return this._searchDirPrefixWalk(q, dirPath, depth, budget);
+    }
+
+    _searchDirPrefixWalk(q, dirPath, depth, budget) {
         const entries = this._lsEntries(dirPath);
         for (const c of entries) {
             budget--;
@@ -3541,7 +3630,7 @@ _renderLsPick(data) {
                 return null;
             if (!c.isDir)
                 continue;
-            const hit = this._searchDirPrefix(q, c.path, depth - 1, budget);
+            const hit = this._searchDirPrefixWalk(q, c.path, depth - 1, budget);
             if (hit)
                 return hit;
         }
@@ -3556,6 +3645,39 @@ _renderLsPick(data) {
         return parts.slice(-3).join('/');
     }
 
+    /* Short-TTL memo for the recursive folder scans below. Typing a
+       folder name re-queries every keystroke (ghost, grid, picker);
+       readdir results are already mtime-cached, so the walk itself —
+       up to ~20k main-thread JS steps per keystroke — is the cost this
+       removes (measured ~20-30ms per keystroke on a real home dir).
+       Entries live 2s (same staleness class as _lsEntries), at most 24
+       are kept, and copies go both ways so callers can never mutate
+       the cache. Only canonical top-level scans are memoized — inner
+       recursion calls the *Walk cores directly, or churn would evict
+       everything useful. */
+    _scanMemo(key, compute) {
+        const snap = v => Array.isArray(v) ? v.slice() :
+            (v && typeof v === 'object' ? {...v} : v);
+        const now = Date.now();
+        const gen = this._lsEnumGen || 0;
+        if (!this._scanMemoCache)
+            this._scanMemoCache = new Map();
+        const hit = this._scanMemoCache.get(key);
+        /* Hit only when no proven tree mutation happened since (an
+           mtime mismatch or newly unreadable path moves the generation
+           from inside _lsEntries) and the entry is younger than 2s.
+           Steady-state typing never invalidates, so repeated queries
+           cost one map lookup instead of a ~20-30ms main-thread walk. */
+        if (hit && hit.gen === gen && now - hit.t < 2000)
+            return snap(hit.out);
+        const out = compute();
+        this._scanMemoCache.set(key,
+            {t: now, gen: this._lsEnumGen || 0, out: snap(out)});
+        if (this._scanMemoCache.size > 24)
+            this._scanMemoCache.delete(this._scanMemoCache.keys().next().value);
+        return out;
+    }
+
     /* Every folder in the home tree whose exact name equals the fragment
        (case-insensitive), sorted by path. When more than one matches, the
        `ls` surface shows a picker list so the user chooses which one. */
@@ -3563,23 +3685,25 @@ _renderLsPick(data) {
         const q = String(name || '').toLowerCase();
         if (!q)
             return [];
-        const out = [];
-        let budget = 20000;
-        const walk = (dirPath, depth) => {
-            if (depth < 0 || budget <= 0 || out.length >= 100)
-                return;
-            for (const c of this._lsEntries(dirPath)) {
-                if (budget-- <= 0 || out.length >= 100)
+        return this._scanMemo(`F:${q}`, () => {
+            const out = [];
+            let budget = 20000;
+            const walk = (dirPath, depth) => {
+                if (depth < 0 || budget <= 0 || out.length >= 100)
                     return;
-                if (!c.isDir)
-                    continue;
-                if (c.name.toLowerCase() === q)
-                    out.push({name: c.name, path: c.path});
-                walk(c.path, depth - 1);
-            }
-        };
-        walk(GLib.get_home_dir(), 4);
-        return out.sort((a, b) => a.path.localeCompare(b.path));
+                for (const c of this._lsEntries(dirPath)) {
+                    if (budget-- <= 0 || out.length >= 100)
+                        return;
+                    if (!c.isDir)
+                        continue;
+                    if (c.name.toLowerCase() === q)
+                        out.push({name: c.name, path: c.path});
+                    walk(c.path, depth - 1);
+                }
+            };
+            walk(GLib.get_home_dir(), 4);
+            return out.sort((a, b) => a.path.localeCompare(b.path));
+        });
     }
 
     _installedApps() {
@@ -4009,11 +4133,64 @@ _renderLsPick(data) {
         }
     }
 
+    /* Layout watchdog: rows can be fully functional (keyboard launch
+       works) yet paint nothing when Clutter stalls layout — the panel
+       then needs a logout to recover. If the previous render showed
+       rows but the first row still has no allocation while the overlay
+       is mapped, kick a relayout (harmless when layout is fine) and
+       leave a journal line as proof it fired. Needs two consecutive
+       zero-allocation sightings so a single pending frame never heals
+       spuriously. Never throws: diagnostics must not break rendering. */
+    _watchdogRender() {
+        try {
+            if (!this._lastShownCount || !this._overlay ||
+                this._overlay.mapped !== true || !this._pool ||
+                !this._pool.length)
+                return;
+            const box = this._pool[0].box;
+            if (!box || box.visible !== true ||
+                typeof box.get_allocation_box !== 'function')
+                return;
+            let alloc = null;
+            try {
+                alloc = box.get_allocation_box();
+            } catch (e) {
+                return;
+            }
+            const w = alloc ? alloc.x2 - alloc.x1 : 0;
+            const h = alloc ? alloc.y2 - alloc.y1 : 0;
+            if (w > 0 && h > 0) {
+                this._watchdogArmed = false;
+                return;
+            }
+            if (!this._watchdogArmed) {
+                this._watchdogArmed = true;
+                return;
+            }
+            this._watchdogArmed = false;
+            try {
+                if (this._panel &&
+                    typeof this._panel.queue_relayout === 'function')
+                    this._panel.queue_relayout();
+                if (this._results &&
+                    typeof this._results.queue_relayout === 'function')
+                    this._results.queue_relayout();
+            } catch (e) {
+                /* ignore */
+            }
+            console.warn(`Spotlight: relayout kicked ` +
+                `(shown row measured ${w}x${h} while mapped)`);
+        } catch (e) {
+            /* ignore */
+        }
+    }
+
     _render(rows, q) {
         try {
             if (!this._overlay || !this._overlay.visible)
                 return;
 
+            this._watchdogRender();
             this._ensurePool();
             const maxRows = Math.min(
                 this._settings.get_int('max-results'), this._pool.length);
@@ -4100,6 +4277,7 @@ _renderLsPick(data) {
                 this._pool[i].row = null;
                 this._pool[i].box.visible = false;
             }
+            this._lastShownCount = shown.length;
             this._highlight();
 
             /* Suggestive completion: if the top result's label extends the
